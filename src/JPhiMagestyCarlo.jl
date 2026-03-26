@@ -566,6 +566,9 @@ mutable struct JPhiSpinMC <: AbstractMC
     # `nothing`: uniform random unit spin (legacy). `θ>0`: geodesic proposal with angle
     # uniform in `[-θ, θ]` around current spin (often higher acceptance at low T).
     spin_theta_max::Union{Nothing,Float64}
+    # Renormalize all spins (and rebuild zlm cache) every this many sweeps. 0 = disabled.
+    renorm_every::Int
+    sweep_count::Int
 end
 
 @inline interaction_partners(mc::JPhiSpinMC, atom::Int)::Vector{Int} =
@@ -595,6 +598,13 @@ function JPhiSpinMC(params::AbstractDict)
     else
         nothing
     end
+    renorm_every = if haskey(params, :renorm_every)
+        k = Int(params[:renorm_every])
+        k ≥ 0 || throw(ArgumentError("renorm_every must be non-negative, got $k"))
+        k
+    else
+        1000
+    end
     return JPhiSpinMC(
         T,
         ham,
@@ -609,6 +619,8 @@ function JPhiSpinMC(params::AbstractDict)
         other_sites_work,
         cart_idx_work,
         spin_theta_max,
+        renorm_every,
+        0,
     )
 end
 
@@ -965,6 +977,17 @@ function Carlo.sweep!(mc::JPhiSpinMC, ctx::MCContext)
             sold[1], sold[2], sold[3] = sx_old, sy_old, sz_old
             _update_atom_zlm_cache!(mc.zlm_cache, i, sold, mc.max_l)
         end
+    end
+    mc.sweep_count += 1
+    if mc.renorm_every > 0 && mc.sweep_count % mc.renorm_every == 0
+        @inbounds for i in 1:n
+            s = @view mc.spins[:, i]
+            inv_nrm = 1.0 / hypot(s[1], s[2], s[3])
+            s[1] *= inv_nrm
+            s[2] *= inv_nrm
+            s[3] *= inv_nrm
+        end
+        _rebuild_zlm_cache!(mc)
     end
     return nothing
 end
