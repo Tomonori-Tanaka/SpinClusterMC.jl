@@ -16,10 +16,11 @@ using SpinClusterMC.JPhiMagestyCarlo
 const k_B_eV_per_K = 8.617333262e-5
 
 tm = TaskMaker()
-tm.seed = 42
+tm.seed = 1234
 tm.sweeps = 500000
 tm.thermalization = 5000
 tm.binsize = 100
+tm.spin_theta_max = 0.5
 
 xml = joinpath(@__DIR__, "jphi.xml")
 tm.xml_path = xml
