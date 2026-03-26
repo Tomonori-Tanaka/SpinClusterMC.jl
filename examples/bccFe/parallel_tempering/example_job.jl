@@ -3,14 +3,15 @@
 #
 # Parallel tempering job for JPhiSpinMC.
 # One task corresponds to one tempering chain.
-
-import Pkg
-Pkg.activate(@__DIR__)
+# Continue from checkpoint if present:
+#   Run (MPI):     mpiexec -n <nprocs> julia example_job.jl run
+#   Run (single):                       julia example_job.jl run
+# Reset history and recompute from scratch:
+#   Restart:                            julia example_job.jl run --restart
 
 using Carlo
 using Carlo.JobTools
-include("JPhiMagestyCarlo.jl")
-using .JPhiMagestyCarlo
+using SpinClusterMC.JPhiMagestyCarlo
 
 const k_B_eV_per_K = 8.617333262e-5
 

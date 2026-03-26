@@ -362,20 +362,6 @@ function coupled_cluster_energy(
     return result
 end
 
-function coupled_cluster_energy(
-    cbc::CoupledBasis_with_coefficient,
-    spin_directions::AbstractMatrix{<:Real},
-    map_sym::AbstractMatrix{Int},
-)::Float64
-    return coupled_cluster_energy(
-        cbc,
-        spin_directions,
-        map_sym;
-        repeat = (1, 1, 1),
-        base_n_atoms = size(map_sym, 1),
-    )
-end
-
 @inline function _tensor_contract_instance(
     cbc::CoupledBasis_with_coefficient,
     translated_atoms::Vector{Int},

@@ -9,3 +9,4 @@ Manifest*.toml
 
 LocalPreferences.toml
 JuliaLocalPreferences.toml
+*.data/

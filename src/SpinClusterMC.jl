@@ -1,5 +1,9 @@
 module SpinClusterMC
 
-# Write your package code here.
+include("JPhiMagestyCarlo.jl")
+
+using .JPhiMagestyCarlo
+
+export JPhiMagestyCarlo
 
 end
