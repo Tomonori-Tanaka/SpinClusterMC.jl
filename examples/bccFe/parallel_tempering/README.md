@@ -59,7 +59,7 @@ ranks_per_run = length(Ts_mc)   # Must equal N_temps
 ## Visualization
 
 PT observables are stored as vectors (one entry per temperature).
-Reads `example_job_pt.results.json` and plots specific heat with error bars.
+Reads `example_job.results.json` and plots specific heat with error bars.
 
 Run from the Julia REPL to keep the plot window open (recommended):
 ```julia
@@ -74,7 +74,7 @@ julia visualize.jl
 ```julia
 using Carlo.ResultTools, DataFrames
 
-df  = DataFrame(ResultTools.dataframe("example_job_pt.results.json"))
+df  = DataFrame(ResultTools.dataframe("example_job.results.json"))
 pt  = df.parallel_tempering[1]
 T_K = Float64.(pt["values"]) ./ 8.617333262e-5   # convert eV → K
 

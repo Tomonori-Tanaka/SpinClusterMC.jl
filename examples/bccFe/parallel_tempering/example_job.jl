@@ -1,5 +1,5 @@
 #!/usr/bin/env julia
-# example_job_pt.jl
+# example_job.jl
 #
 # Parallel tempering job for JPhiSpinMC.
 # One task corresponds to one tempering chain.

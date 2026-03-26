@@ -2,10 +2,10 @@ using Plots
 using DataFrames
 using Carlo.ResultTools
 
-# Boltzmann constant (eV/K), same as example_job_pt.jl
+# Boltzmann constant (eV/K), same as example_job.jl
 const k_B_eV_per_K = 8.617333262e-5
 
-results_path = joinpath(@__DIR__, "example_job_pt.results.json")
+results_path = joinpath(@__DIR__, "example_job.results.json")
 df = DataFrame(ResultTools.dataframe(results_path))
 # PT results have one row per chain, and temperature values are stored in
 # parameters.parallel_tempering.values instead of a plain `T` column.
