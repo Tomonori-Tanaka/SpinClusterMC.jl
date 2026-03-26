@@ -20,7 +20,7 @@ using LinearAlgebra
 using Random
 
 using Magesty.Basis: CoupledBasis_with_coefficient
-using Magesty.MySphericalHarmonics: Zₗₘ
+using Magesty.MySphericalHarmonics: Zₗₘ_unsafe
 using Magesty.XMLIO: read_basisset_from_xml
 
 export SCEHamiltonian,
@@ -333,7 +333,7 @@ function coupled_cluster_energy(
                         for m_idx in 1:(2 * l + 1)
                             m = m_idx - l - 1
                             u = @view spin_directions[:, atom]
-                            sh_values[site_idx][m_idx] = Zₗₘ(l, m, u)
+                            sh_values[site_idx][m_idx] = Zₗₘ_unsafe(l, m, u)
                         end
                     end
 
@@ -375,7 +375,7 @@ end
         for m_idx in 1:(2 * l + 1)
             m = m_idx - l - 1
             u = @view spin_directions[:, atom]
-            sh_values[site_idx][m_idx] = Zₗₘ(l, m, u)
+            sh_values[site_idx][m_idx] = Zₗₘ_unsafe(l, m, u)
         end
     end
 
@@ -647,7 +647,7 @@ function _update_atom_zlm_cache!(
     @inbounds for l in 0:max_l
         @simd for m_idx in 1:(2 * l + 1)
             m = m_idx - l - 1
-            zlm_cache[atom, _zlm_col(l, m_idx)] = Zₗₘ(l, m, u)
+            zlm_cache[atom, _zlm_col(l, m_idx)] = Zₗₘ_unsafe(l, m, u)
         end
     end
     return nothing
