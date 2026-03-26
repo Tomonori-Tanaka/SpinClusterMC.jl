@@ -1,9 +1,25 @@
 name = "SpinClusterMC"
 uuid = "e9b40308-012f-49ab-9d45-cb028b7a04e4"
-authors = ["T.Tanaka <tanaka.t.bj3ac@gmail.com> and contributors"]
 version = "1.0.0-DEV"
+authors = ["T.Tanaka <tanaka.t.bj3ac@gmail.com> and contributors"]
+
+[deps]
+Carlo = "780c37f4-4e5a-43de-9e79-65c261e525a4"
+EzXML = "8f5d6c58-4d21-5cfd-889c-e3ad7ee6a615"
+HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+MPI = "da04e1cc-30fd-572f-bb4f-1f8673147195"
+Magesty = "329bda51-4b33-4ad1-95c9-f0535f133d43"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 
 [compat]
+Carlo = "0.3.2"
+EzXML = "1.2.3"
+HDF5 = "0.17.2"
+LinearAlgebra = "1.12.0"
+MPI = "0.20.24"
+Magesty = "0.1.0"
+Random = "1.11.0"
 julia = "1.12"
 
 [extras]
