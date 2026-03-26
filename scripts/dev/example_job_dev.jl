@@ -6,4 +6,4 @@
 import Pkg
 Pkg.activate(joinpath(@__DIR__, "../.."))
 
-include(joinpath(@__DIR__, "../../examples/bccFe/mpi/example_job.jl"))
+include(joinpath(@__DIR__, "../../examples/bccFe/metropolis/example_job.jl"))
