@@ -11,3 +11,5 @@ LocalPreferences.toml
 JuliaLocalPreferences.toml
 *.data/
 *.results.json
+
+*.code-workspace
