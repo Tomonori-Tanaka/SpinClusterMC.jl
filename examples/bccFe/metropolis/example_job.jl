@@ -17,8 +17,8 @@ const k_B_eV_per_K = 8.617333262e-5
 
 tm = TaskMaker()
 tm.seed = 1234
-tm.sweeps = 100000
-tm.thermalization = 5000
+tm.sweeps = 500000
+tm.thermalization = 50000
 tm.binsize = 50
 tm.spin_theta_max = 0.5
 
@@ -26,7 +26,7 @@ xml = joinpath(@__DIR__, "jphi.xml")
 # Supercell: tile the XML cell (n1,n2,n3) times in fractional stacking (e.g. 2,2,2 -> 16*8 = 128 atoms)
 # tm.repeat = (2, 2, 2)
 # Alias: tm.supercell = (2, 2, 2)
-tm.supercell = (1, 1, 1)
+tm.supercell = (2, 2, 2)
 
 for T_K in range(100.0, 1500.0, length = 8)
     tm.T = k_B_eV_per_K * T_K

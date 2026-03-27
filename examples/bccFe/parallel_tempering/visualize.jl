@@ -24,14 +24,12 @@ p1 = plot(T_K, cv;
     yerror = cv_err,
     xlabel = "Temperature (K)",
     ylabel = "SpecificHeat",
-    label = "L=$(Int(round(df.Lx[1])))",
 )
 
 p2 = plot(T_K, mag;
     yerror = mag_err,
     xlabel = "Temperature (K)",
     ylabel = "Magnetization",
-    label = "L=$(Int(round(df.Lx[1])))",
 )
 
 plot(p1, p2; layout = (2, 1))

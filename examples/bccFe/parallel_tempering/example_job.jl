@@ -24,7 +24,7 @@ tm.spin_theta_max = 0.5
 
 xml = joinpath(@__DIR__, "jphi.xml")
 tm.xml_path = xml
-tm.supercell = (1, 1, 1)
+tm.supercell = (2, 2, 2)
 
 Ts_K = range(100.0, 1500.0; length = 8)
 Ts_mc = collect(k_B_eV_per_K .* Ts_K)
