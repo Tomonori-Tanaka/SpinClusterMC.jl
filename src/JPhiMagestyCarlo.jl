@@ -984,9 +984,13 @@ function Carlo.measure!(mc::JPhiSpinMC, ctx::MCContext)
     my = sum(@view mc.spins[2, :]) / n
     mz = sum(@view mc.spins[3, :]) / n
     mag2 = mx^2 + my^2 + mz^2
+    mag = sqrt(mag2)
     measure!(ctx, :Energy, mc.energy / n)
     measure!(ctx, :Energy2, (mc.energy / n)^2)
+    measure!(ctx, :Magnetization, mag)
+    measure!(ctx, :AbsMagnetization, mag)
     measure!(ctx, :Magnetization2, mag2)
+    measure!(ctx, :Magnetization4, mag2^2)
     return nothing
 end
 
@@ -1003,6 +1007,12 @@ function Carlo.register_evaluables(::Type{JPhiSpinMC}, eval::AbstractEvaluator, 
     n = load_sce_hamiltonian(params[:xml_path]; repeat = _parse_repeat_param(params)).n_atoms
     evaluate!(eval, :SpecificHeat, (:Energy2, :Energy)) do e2, e
         return n * (e2 - e^2) / T^2
+    end
+    evaluate!(eval, :BinderRatio, (:Magnetization2, :Magnetization4)) do mag2, mag4
+        return mag2 * mag2 / mag4
+    end
+    evaluate!(eval, :Susceptibility, (:Magnetization2,)) do mag2
+        return n * mag2 / T
     end
     return nothing
 end

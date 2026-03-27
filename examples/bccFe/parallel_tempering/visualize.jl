@@ -17,9 +17,21 @@ T_K = T_mc ./ k_B_eV_per_K
 cv = getfield.(df.SpecificHeat[1], :val)
 cv_err = getfield.(df.SpecificHeat[1], :err)
 
-plot(T_K, cv;
+mag = getfield.(df.Magnetization[1], :val)
+mag_err = getfield.(df.Magnetization[1], :err)
+
+p1 = plot(T_K, cv;
     yerror = cv_err,
     xlabel = "Temperature (K)",
     ylabel = "SpecificHeat",
     label = "L=$(Int(round(df.Lx[1])))",
 )
+
+p2 = plot(T_K, mag;
+    yerror = mag_err,
+    xlabel = "Temperature (K)",
+    ylabel = "Magnetization",
+    label = "L=$(Int(round(df.Lx[1])))",
+)
+
+plot(p1, p2; layout = (2, 1))
