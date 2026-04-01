@@ -43,12 +43,18 @@ struct SystemXMLInfo
     map_sym::Matrix{Int}
 end
 
+"""
+Parse a whitespace-separated 3-vector string into `Float64` values.
+"""
 function _parse_vec3(s::AbstractString)
     p = parse.(Float64, split(s))
     length(p) == 3 || throw(ArgumentError("expected 3 floats, got $(repr(s))"))
     return p
 end
 
+"""
+Wrap fractional coordinates into the minimum-image range around zero.
+"""
 function _min_image_frac(v::AbstractVector{<:Real})
     w = collect(Float64, v)
     @inbounds for i in eachindex(w)
@@ -57,10 +63,22 @@ function _min_image_frac(v::AbstractVector{<:Real})
     return w
 end
 
+"""
+Compute minimum-image distance between two fractional coordinates.
+"""
 function _frac_periodic_dist(a::AbstractVector{<:Real}, b::AbstractVector{<:Real})
     return norm(_min_image_frac(a .- b))
 end
 
+"""
+Fill missing entries of translation `t` in `map_sym` by periodic nearest-image matching.
+
+# Arguments
+- `map_sym::Matrix{Int}`: Translation map table (`atom × trans`) updated in place.
+- `pos_frac::AbstractMatrix{Float64}`: Fractional atomic positions (`3 × n_atoms`).
+- `t::Int`: Translation-column index to complete.
+- `n_atoms::Int`: Number of atoms to process in the base cell.
+"""
 function _infer_atom_map_from_atom1!(
     map_sym::Matrix{Int},
     pos_frac::AbstractMatrix{Float64},
@@ -179,6 +197,16 @@ struct SCEHamiltonian
     n_trans::Int
 end
 
+"""
+Concrete translated cluster term used in MC energy evaluation.
+
+# Fields
+- `atoms`: Supercell atom indices for this instance (site order matches `cbc`).
+- `cbc`: Basis/tensor data for the coupled cluster.
+- `prefactor`: Pre-multiplied scalar factor (`jphi * multiplicity * scaling`).
+- `dims`: Per-site tensor dimensions (`dims[k] = 2*cbc.ls[k] + 1`).
+- `strides`: Flattened tensor strides (length `N+1`, `N = length(atoms)`).
+"""
 struct ClusterInstance
     atoms::Vector{Int}
     cbc::CoupledBasis_with_coefficient
@@ -188,6 +216,13 @@ struct ClusterInstance
     strides::Vector{Int} # tensor strides, length N+1; strides[k] = prod(dims[1:k-1])
 end
 
+"""
+Precompute tensor strides for flattened coefficient-tensor indexing.
+
+# Example
+For `ls = [1, 2]`, tensor dimensions are `[3, 5]` and the returned
+strides are `[1, 3, 15]` (`N+1` entries).
+"""
 @inline function _compute_instance_strides(ls::AbstractVector{Int})::Vector{Int}
     N = length(ls)
     s = Vector{Int}(undef, N + 1)
@@ -207,6 +242,9 @@ struct LocalEnergyCache
     partners_by_atom_by_body::Vector{Vector{Vector{Int}}}
 end
 
+"""
+Return `(4π)^(n_sites/2)` normalization used for cluster contributions.
+"""
 @inline _cluster_scaling(n_sites::Integer)::Float64 = (4 * pi)^(n_sites / 2)
 
 @inline function supercell_atom_index(
@@ -224,6 +262,9 @@ end
     return base_atom + base_n * (ti + n1 * tj + n1 * n2 * tk)
 end
 
+"""
+Build supercell lattice and wrapped fractional positions from base-cell data.
+"""
 function _build_supercell_geometry(
     lattice::Matrix{Float64},
     pos_base_frac::Matrix{Float64},
@@ -362,6 +403,9 @@ function coupled_cluster_energy(
     return result
 end
 
+"""
+Evaluate one cluster tensor contraction for the provided translated atoms.
+"""
 @inline function _tensor_contract_instance(
     cbc::CoupledBasis_with_coefficient,
     translated_atoms::Vector{Int},
@@ -397,6 +441,9 @@ end
     return tensor_result
 end
 
+"""
+Enumerate unique translated cluster instances and precompute metadata.
+"""
 function _build_cluster_instances(h::SCEHamiltonian)::Vector{ClusterInstance}
     instances = ClusterInstance[]
     n1, n2, n3 = h.repeat
@@ -502,6 +549,9 @@ function interaction_partners_by_body(
     return out
 end
 
+"""
+Accumulate total interaction energy from prebuilt cluster instances.
+"""
 function _energy_from_instances(
     instances::Vector{ClusterInstance},
     spin_directions::AbstractMatrix{<:Real},
@@ -610,6 +660,9 @@ function JPhiSpinMC(params::AbstractDict)
     )
 end
 
+"""
+Return the maximum cluster size among all instances.
+"""
 function _max_sites_in_instances(instances::Vector{ClusterInstance})::Int
     m = 1
     for inst in instances
@@ -621,6 +674,9 @@ function _max_sites_in_instances(instances::Vector{ClusterInstance})::Int
     return m
 end
 
+"""
+Return the maximum angular-momentum degree `l` across all instances.
+"""
 function _max_l_in_instances(instances::Vector{ClusterInstance})::Int
     m = 0
     for inst in instances
@@ -631,13 +687,22 @@ function _max_l_in_instances(instances::Vector{ClusterInstance})::Int
     return m
 end
 
+"""
+Map `(l, m_idx)` to a contiguous cache column index.
+"""
 @inline _zlm_col(l::Int, m_idx::Int)::Int = l * l + m_idx
 
+"""
+Allocate per-atom cache for all real spherical harmonics up to `max_l`.
+"""
 function _alloc_zlm_cache(n_atoms::Int, max_l::Int)::Matrix{Float64}
     # sum_{l=0}^{L} (2l+1) = (L+1)^2
     return zeros(Float64, n_atoms, (max_l + 1)^2)
 end
 
+"""
+Refresh cached `Z_lm` values for one atom from its current spin.
+"""
 function _update_atom_zlm_cache!(
     zlm_cache::Matrix{Float64},
     atom::Int,
@@ -653,6 +718,9 @@ function _update_atom_zlm_cache!(
     return nothing
 end
 
+"""
+Rebuild the full per-atom `Z_lm` cache from current MC spins.
+"""
 function _rebuild_zlm_cache!(mc::JPhiSpinMC)
     @inbounds for atom in 1:mc.ham.n_atoms
         _update_atom_zlm_cache!(mc.zlm_cache, atom, @view(mc.spins[:, atom]), mc.max_l)
@@ -660,6 +728,9 @@ function _rebuild_zlm_cache!(mc::JPhiSpinMC)
     return nothing
 end
 
+"""
+Resolve active body-size indices from `params[:enabled_bodies]` selection.
+"""
 function _parse_enabled_body_indices(
     params::AbstractDict,
     body_list::Vector{Int},
@@ -684,6 +755,9 @@ function _parse_enabled_body_indices(
     return active
 end
 
+"""
+Collect unique instance indices that belong to active body-size groups.
+"""
 function _active_instance_indices(
     cache::LocalEnergyCache,
     active_body_indices::Vector{Int},
@@ -699,6 +773,9 @@ function _active_instance_indices(
     return findall(marks)
 end
 
+"""
+Build per-atom lists of active instances touching each atom.
+"""
 function _build_related_instances_by_atom(
     cache::LocalEnergyCache,
     active_body_indices::Vector{Int},
@@ -721,6 +798,9 @@ function _build_related_instances_by_atom(
     return by_atom
 end
 
+"""
+Parse `:repeat` / `:supercell` parameters, defaulting to `(1,1,1)`.
+"""
 function _parse_repeat_param(params::AbstractDict)::NTuple{3, Int}
     if haskey(params, :repeat)
         r = params[:repeat]
@@ -735,6 +815,9 @@ function _parse_repeat_param(params::AbstractDict)::NTuple{3, Int}
     return (1, 1, 1)
 end
 
+"""
+Sample a random unit vector uniformly on the sphere.
+"""
 @inline function _rand_unit_spin(rng)
     z = 2.0 * rand(rng) - 1.0
     ϕ = 2π * rand(rng)
@@ -777,6 +860,9 @@ current direction and Metropolis acceptance is typically much higher than i.i.d.
     return c * ux + s * tx, c * uy + s * ty, c * uz + s * tz
 end
 
+"""
+Evaluate one instance contraction using precomputed per-atom `Z_lm` cache.
+"""
 @inline function _tensor_contract_instance_cached(
     inst::ClusterInstance,
     zlm_cache::Matrix{Float64},
