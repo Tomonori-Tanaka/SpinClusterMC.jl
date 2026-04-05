@@ -604,6 +604,9 @@ mutable struct JPhiSpinMC <: AbstractMC
     related_instances_by_atom::Vector{Vector{Int}}
     max_l::Int
     zlm_cache::Matrix{Float64}
+    # Preallocated buffer to save/restore one atom's ZLM row on Metropolis rejection,
+    # avoiding recomputation of all (max_l+1)² spherical harmonics for rejected moves.
+    zlm_row_buf::Vector{Float64}
     # Reused in Metropolis sweeps to avoid per-instance allocations in delta energy.
     # (strides and dims are now precomputed in ClusterInstance)
     contract_other_sites::Vector{Int}
@@ -633,6 +636,7 @@ function JPhiSpinMC(params::AbstractDict)
     related_instances_by_atom = _build_related_instances_by_atom(cache, active_body_indices, ham.n_atoms)
     max_l = _max_l_in_instances(cache.instances)
     zlm_cache = _alloc_zlm_cache(ham.n_atoms, max_l)
+    zlm_row_buf = Vector{Float64}(undef, (max_l + 1)^2)
     max_sites = _max_sites_in_instances(cache.instances)
     other_sites_work = Vector{Int}(undef, max_sites)
     cart_idx_work = Vector{Int}(undef, max_sites)
@@ -661,6 +665,7 @@ function JPhiSpinMC(params::AbstractDict)
         related_instances_by_atom,
         max_l,
         zlm_cache,
+        zlm_row_buf,
         other_sites_work,
         cart_idx_work,
         spin_theta_max,
@@ -1036,6 +1041,11 @@ function Carlo.sweep!(mc::JPhiSpinMC, ctx::MCContext)
         else
             _propose_spin_geodesic(ctx.rng, sx_old, sy_old, sz_old, mc.spin_theta_max)
         end
+        zlm_row_buf = mc.zlm_row_buf
+        ncols = (mc.max_l + 1)^2
+        @inbounds for j in 1:ncols
+            zlm_row_buf[j] = mc.zlm_cache[i, j]
+        end
         sold[1], sold[2], sold[3] = sx_new, sy_new, sz_new
         _update_atom_zlm_cache!(mc.zlm_cache, i, sold, mc.max_l)
 
@@ -1056,7 +1066,9 @@ function Carlo.sweep!(mc::JPhiSpinMC, ctx::MCContext)
             mc.energy += dE
         else
             sold[1], sold[2], sold[3] = sx_old, sy_old, sz_old
-            _update_atom_zlm_cache!(mc.zlm_cache, i, sold, mc.max_l)
+            @inbounds for j in 1:ncols
+                mc.zlm_cache[i, j] = zlm_row_buf[j]
+            end
         end
     end
     mc.sweep_count += 1
