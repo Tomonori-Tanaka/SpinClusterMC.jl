@@ -563,9 +563,18 @@ function _energy_from_instances(
     return E
 end
 
+"""
+    sce_energy(h, spin_directions) -> Float64
+
+Total SCE Hamiltonian energy: constant offset `h.j0` plus, for each SALC index `s`, the weighted sum of
+`coupled_cluster_energy` over every coupled cluster in `h.salc_list[s]`, with weights `h.jphi[s]`.
+
+`spin_directions` should be `3 × h.n_atoms`: rows 1–3 are `x`, `y`, `z` of the spin direction; columns are
+supercell atoms (`a` → column `a`). Only the column count is checked here; each column is passed to
+`Zₗₘ_unsafe` as a 3-vector inside `coupled_cluster_energy`. Shape matches `h.map_sym`, `h.repeat`, and
+`h.base_n_atoms` as in that routine.
+"""
 function sce_energy(h::SCEHamiltonian, spin_directions::AbstractMatrix{<:Real})::Float64
-    size(spin_directions, 2) == h.n_atoms ||
-        throw(ArgumentError("spin matrix has $(size(spin_directions,2)) columns, expected $(h.n_atoms)"))
     E = h.j0
     for (s, group) in enumerate(h.salc_list)
         js = h.jphi[s]
