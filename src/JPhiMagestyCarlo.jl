@@ -788,7 +788,22 @@ function _active_instance_indices(
 end
 
 """
-Build per-atom lists of active instances touching each atom.
+    _build_related_instances_by_atom(cache, active_body_indices, n_atoms) -> Vector{Vector{Int}}
+
+Build per-atom lists of active cluster instance indices that include each atom.
+Used in `sweep!` to identify which instances must be recontracted when a single spin changes.
+
+# Arguments
+- `cache::LocalEnergyCache`: Prebuilt cache containing all cluster instances and their
+  per-atom, per-body-size index lists (`cache.by_atom_by_body`).
+- `active_body_indices::Vector{Int}`: Indices into `cache.body_list` selecting which
+  cluster body sizes are enabled (e.g. only 2-body or only 2- and 3-body terms).
+- `n_atoms::Int`: Total number of atoms in the supercell.
+
+# Returns
+`by_atom` where `by_atom[i]` is the sorted list of instance indices whose atom set
+contains atom `i` and whose body size is active. Duplicate instance indices that appear
+in multiple body-size lists are deduplicated via a stamp array (O(1) per entry).
 """
 function _build_related_instances_by_atom(
     cache::LocalEnergyCache,
