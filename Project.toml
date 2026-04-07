@@ -13,7 +13,7 @@ Magesty = "329bda51-4b33-4ad1-95c9-f0535f133d43"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 
 [compat]
-Carlo = "0.3.2"
+Carlo = "0.3.3"
 EzXML = "1.2.3"
 HDF5 = "0.17.2"
 LinearAlgebra = "1.12.0"
