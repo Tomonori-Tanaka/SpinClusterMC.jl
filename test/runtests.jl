@@ -18,7 +18,7 @@ function rand_unit_spins(rng, n)
     return spins
 end
 
-@testset "SpinClusterMC.jl" begin
+@testset verbose=true "SpinClusterMC.jl" begin
 
     # -----------------------------------------------------------------------
     @testset "supercell_atom_index" begin
@@ -280,5 +280,7 @@ end
     else
         @warn "Skipping XML-dependent tests: $XML not found"
     end
+
+    include("bcc_2x2x2/test_bcc_2x2x2.jl")
 
 end
