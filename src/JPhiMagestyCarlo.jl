@@ -1230,9 +1230,12 @@ end
 
 function __init__()
     # Patch at runtime (not during precompile) to avoid precompile-time method-overwrite errors.
+    # Use $ to interpolate the function object directly — the name `JPhiMagestyCarlo` is not
+    # in Carlo's namespace and would cause UndefVarError when the method is called.
+    fn = _read_parallel_measurements_checkpoint
     @eval Carlo begin
         function read_checkpoint(::Type{ParallelMeasurements}, in::HDF5.Group)
-            return JPhiMagestyCarlo._read_parallel_measurements_checkpoint(in)
+            return $fn(in)
         end
     end
 end
