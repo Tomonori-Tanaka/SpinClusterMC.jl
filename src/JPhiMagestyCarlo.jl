@@ -1197,4 +1197,44 @@ function Carlo.parallel_tempering_change_parameter!(mc::JPhiSpinMC, parameter::S
     mc.T = Float64(new_value)
 end
 
+# Compatibility patch helper for Carlo.jl checkpoints:
+# In some Carlo versions, `ParallelMeasurements` checkpoints with an empty queue
+# may not contain the "names" group. The upstream reader assumes it always exists
+# and throws `KeyError: key "names" not found` on resume.
+function _read_parallel_measurements_checkpoint(in::HDF5.Group)
+    if !haskey(in, "names")
+        return Carlo.ParallelMeasurements()
+    end
+
+    saved_values = read(in, "names")
+    if isempty(saved_values)
+        return Carlo.ParallelMeasurements()
+    end
+
+    queue = Vector{Tuple{Symbol,Any}}(
+        undef,
+        maximum(x -> maximum(x["order"]), values(saved_values)),
+    )
+
+    collapse_scalar(x) = x
+    collapse_scalar(x::AbstractArray{<:Any,0}) = x[]
+
+    for (name, vals) in saved_values
+        for (i, v) in zip(vals["order"], eachslice(vals["values"]; dims = ndims(vals["values"])))
+            queue[i] = (Symbol(name), collapse_scalar(v))
+        end
+    end
+
+    return Carlo.ParallelMeasurements(queue)
+end
+
+function __init__()
+    # Patch at runtime (not during precompile) to avoid precompile-time method-overwrite errors.
+    @eval Carlo begin
+        function read_checkpoint(::Type{ParallelMeasurements}, in::HDF5.Group)
+            return JPhiMagestyCarlo._read_parallel_measurements_checkpoint(in)
+        end
+    end
+end
+
 end # module
