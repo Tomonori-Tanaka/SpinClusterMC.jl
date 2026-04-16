@@ -593,6 +593,97 @@ end
 
 # --- Carlo.AbstractMC ---
 
+"""
+    JPhiSpinMC <: Carlo.AbstractMC
+
+Metropolis Monte Carlo sampler for a spin Hamiltonian expressed as a
+Symmetry-adapted Cluster Expansion (SCE).  Implements the `Carlo.AbstractMC`
+interface and is intended to be driven by the Carlo.jl scheduler.
+
+# Quick start
+
+```julia
+using Carlo, Carlo.JobTools
+using SpinClusterMC.JPhiMagestyCarlo
+
+tm = JobTools.TaskMaker()
+tm.sweeps        = 2000
+tm.thermalization = 500
+tm.binsize       = 10
+tm.seed          = 42
+tm.xml_path      = "path/to/jphi.xml"
+tm.T             = 0.5          # temperature in eV
+
+# Optional: start from a ferromagnetic initial configuration
+tm.initial_spins = let s = zeros(3, 16); s[3,:] .= 1.0; s end
+
+JobTools.task(tm)
+job = JobTools.JobInfo("output_dir", JPhiSpinMC; tasks = JobTools.make_tasks(tm),
+                       checkpoint_time = "1:00", run_time = "60:00")
+Carlo.start(Carlo.SingleScheduler, job)
+```
+
+# Accepted `params` keys
+
+## Required
+| Key | Type | Description |
+|:----|:-----|:------------|
+| `:xml_path` | `String` | Path to the Magesty XML file that defines the SCE Hamiltonian. |
+| `:T` | `Real` | Temperature in eV. |
+| `:thermalization` | `Int` | Number of thermalization sweeps before measurements begin (Carlo convention). |
+| `:binsize` | `Int` | Measurement bin length (Carlo convention). |
+
+## Geometry
+| Key | Type | Default | Description |
+|:----|:-----|:--------|:------------|
+| `:repeat` or `:supercell` | 3-vector of `Int` | `(1,1,1)` | Tiling of the primitive cell read from the XML. Total atom count becomes `base_n_atoms × n₁ × n₂ × n₃`. |
+
+## Initial spin configuration
+| Key | Type | Default | Description |
+|:----|:-----|:--------|:------------|
+| `:initial_spins` | `Matrix{<:Real}` of size `(3, base_n_atoms)` | (random) | Spin configuration for the **base cell** (`repeat = (1,1,1)`). If provided, this configuration is tiled periodically over the full supercell by `Carlo.init!`; otherwise all spins are drawn uniformly at random on the unit sphere. Each column is renormalized to a unit vector automatically. See [`_tile_base_spins!`](@ref) for the tiling convention. |
+
+## Spin proposal
+| Key | Type | Default | Description |
+|:----|:-----|:--------|:------------|
+| `:spin_theta_max` | `Float64 > 0` | `nothing` | If set, each Metropolis proposal is drawn geodesically within a cone of half-angle `θ_max` (radians) around the current spin. This typically yields higher acceptance at low temperatures. If absent, proposals are drawn uniformly on the sphere. |
+
+## Numerical stability
+| Key | Type | Default | Description |
+|:----|:-----|:--------|:------------|
+| `:renorm_every` | `Int ≥ 0` | `1000` | Renormalize all spins every this many sweeps to prevent floating-point drift. Set to `0` to disable. |
+
+## Body-size selection
+| Key | Type | Default | Description |
+|:----|:-----|:--------|:------------|
+| `:enabled_bodies` | collection of `Int` | (all) | Restrict the active cluster interactions to the listed body sizes (e.g., `[2]` for pair interactions only). Raises `ArgumentError` if a listed size is not present in the XML or if the selection is empty. |
+
+## Carlo scheduler
+| Key | Type | Description |
+|:----|:-----|:------------|
+| `:seed` | `Int` | RNG seed. |
+
+# Measured observables
+
+Every sweep records the following observables in the Carlo accumulator:
+
+| Name | Formula |
+|:-----|:--------|
+| `:Energy` | Total energy per atom (eV). |
+| `:Energy2` | Squared energy per atom (eV²). |
+| `:Magnetization` | Vector-magnetization magnitude `|⟨S⟩|`. |
+| `:AbsMagnetization` | Same as `:Magnetization`. |
+| `:Magnetization2` | `|⟨S⟩|²`. |
+| `:Magnetization4` | `|⟨S⟩|⁴`. |
+
+Derived quantities registered via `Carlo.register_evaluables`:
+
+| Name | Formula |
+|:-----|:--------|
+| `:SpecificHeat` | `N (⟨E²⟩ − ⟨E⟩²) / T²` |
+| `:BinderRatio` | `⟨m²⟩² / ⟨m⁴⟩` |
+| `:Susceptibility` | `N ⟨m²⟩ / T` |
+"""
 mutable struct JPhiSpinMC <: AbstractMC
     T::Float64
     ham::SCEHamiltonian
@@ -1047,6 +1138,32 @@ function _tile_base_spins!(
     return nothing
 end
 
+"""
+    Carlo.init!(mc::JPhiSpinMC, ctx::MCContext, params::AbstractDict)
+
+Initialize the spin configuration and internal caches before the first sweep.
+
+**Spin initialization** (controlled by `params[:initial_spins]`):
+
+- **With `:initial_spins`** — expects a `3 × base_n_atoms` matrix whose columns
+  are spin vectors for the base cell (`repeat = (1,1,1)` in the XML).
+  The configuration is tiled periodically over the full supercell via
+  [`_tile_base_spins!`](@ref): supercell atom `ia` is assigned the spin of base
+  atom `((ia-1) % base_n_atoms) + 1`.  Each column is renormalized to a unit
+  vector; a zero-norm column raises `ArgumentError`.
+
+  ```julia
+  # Ferromagnetic +z start for a 16-atom base cell
+  s0 = zeros(3, 16); s0[3, :] .= 1.0
+  params[:initial_spins] = s0
+  ```
+
+- **Without `:initial_spins`** — all spins are drawn independently and uniformly
+  on the unit sphere using the seeded RNG in `ctx`.
+
+After setting the spin configuration, the spherical-harmonic cache and the
+stored energy are rebuilt consistently.
+"""
 function Carlo.init!(mc::JPhiSpinMC, ctx::MCContext, params::AbstractDict)
     n = mc.ham.n_atoms
     if haskey(params, :initial_spins)
