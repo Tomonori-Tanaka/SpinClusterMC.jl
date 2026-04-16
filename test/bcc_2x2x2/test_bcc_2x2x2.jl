@@ -58,6 +58,82 @@ end
 
 # ---------------------------------------------------------------------------
 
+@testset "initial_spins tiling via Carlo.init!" begin
+    # Verify that passing :initial_spins (3 × base_n_atoms) tiles correctly into
+    # the supercell and that Carlo.init! honours it instead of randomising spins.
+    base_n = 16   # the XML already defines the 2×2×2 supercell as the primitive cell
+
+    @testset "repeat=$rep" for (rep, expected_n) in [((1,1,1), 16), ((2,2,2), 128)]
+        # Ferromagnetic along +z as the base-cell configuration
+        init_spins = zeros(3, base_n)
+        init_spins[3, :] .= 1.0
+
+        params = Dict(
+            :xml_path       => XML_2x2x2,
+            :repeat         => rep,
+            :T              => 1.0,
+            :thermalization => 0,
+            :binsize        => 1,
+            :seed           => 42,
+            :initial_spins  => init_spins,
+        )
+        mc  = JPhiSpinMC(params)
+        ctx = Carlo.MCContext{MersenneTwister}(params)
+        Carlo.init!(mc, ctx, params)
+
+        @test size(mc.spins) == (3, expected_n)
+        # Every supercell spin must equal the tiled base-cell spin (unit +z)
+        @test all(mc.spins[1, :] .≈ 0.0)
+        @test all(mc.spins[2, :] .≈ 0.0)
+        @test all(mc.spins[3, :] .≈ 1.0)
+    end
+
+    @testset "non-uniform base cell is tiled periodically" begin
+        # Use a non-trivial base configuration: alternating +z / -z pattern
+        init_spins = zeros(3, base_n)
+        for i in 1:base_n
+            init_spins[3, i] = iseven(i) ? 1.0 : -1.0
+        end
+
+        params = Dict(
+            :xml_path       => XML_2x2x2,
+            :repeat         => (2, 1, 1),
+            :T              => 1.0,
+            :thermalization => 0,
+            :binsize        => 1,
+            :seed           => 42,
+            :initial_spins  => init_spins,
+        )
+        mc  = JPhiSpinMC(params)
+        ctx = Carlo.MCContext{MersenneTwister}(params)
+        Carlo.init!(mc, ctx, params)
+
+        n = mc.ham.n_atoms   # 32 for repeat=(2,1,1)
+        @test n == 2 * base_n
+        for ia in 1:n
+            ib = ((ia - 1) % base_n) + 1   # expected base atom
+            @test mc.spins[:, ia] ≈ init_spins[:, ib]
+        end
+    end
+
+    @testset "shape mismatch raises ArgumentError" begin
+        wrong = zeros(3, 5)   # wrong number of base atoms
+        params = Dict(
+            :xml_path       => XML_2x2x2,
+            :T              => 1.0,
+            :thermalization => 0,
+            :binsize        => 1,
+            :seed           => 42,
+            :initial_spins  => wrong,
+        )
+        mc  = JPhiSpinMC(params)
+        ctx = Carlo.MCContext{MersenneTwister}(params)
+        @test_throws ArgumentError Carlo.init!(mc, ctx, params)
+    end
+end
+
+# ---------------------------------------------------------------------------
+
 @testset "Ferromagnetic magnetization = 1 (no spin updates, repeat=$rep)" for rep in [(1,1,1), (2,2,2)]
     # Build MC for the bcc 2x2x2 system.
     # repeat=(1,1,1): 16 atoms (the XML already describes the 2×2×2 supercell)
