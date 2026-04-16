@@ -16,3 +16,8 @@ Prioritize numerical correctness, reproducibility, and physical consistency over
   - Avoid hidden global state.
   - Use explicit type annotations/docstrings for exported APIs.
   - For performance work, benchmark before and after.
+
+  ## Safe workflow for Claude
+  - Do not rewrite working low-level kernels without evidence.
+  - Do not introduce new dependencies unless necessary.
+  - If uncertain about conventions, inspect the relevant docs/tests/source first.

@@ -6,6 +6,8 @@ using MPI
 using Serialization
 using Test
 using Logging
+using Random
+using Statistics
 
 const XML_2x2x2 = joinpath(@__DIR__, "jphi.xml")
 
@@ -52,6 +54,81 @@ function _run_mpi_job(job; num_ranks::Int, scheduler = Carlo.MPIScheduler, silen
     cmd = `$(mpiexec()) -n $num_ranks $(Base.julia_cmd()) --project=$project $helper $job_path`
     silent && (cmd = pipeline(cmd; stdout = devnull, stderr = devnull))
     run(cmd)
+end
+
+# ---------------------------------------------------------------------------
+
+@testset "Ferromagnetic magnetization = 1 (no spin updates, repeat=$rep)" for rep in [(1,1,1), (2,2,2)]
+    # Build MC for the bcc 2x2x2 system.
+    # repeat=(1,1,1): 16 atoms (the XML already describes the 2×2×2 supercell)
+    # repeat=(2,2,2): 128 atoms (further tiling of that supercell)
+    params = Dict(
+        :xml_path => XML_2x2x2,
+        :repeat   => rep,
+        :T        => 1.0,
+        :thermalization => 0,
+        :binsize  => 1,
+        :seed     => 42,
+    )
+    mc = JPhiSpinMC(params)
+
+    # Set ferromagnetic spin configuration: all spins along +z
+    mc.spins .= 0.0
+    mc.spins[3, :] .= 1.0
+
+    # Measure once without any sweep (Carlo.measure! reads mc.spins directly)
+    ctx = Carlo.MCContext{MersenneTwister}(params)
+    Carlo.measure!(mc, ctx)
+
+    # With every spin identical and |s| = 1, the vector magnetization magnitude
+    # must be exactly 1.0 regardless of temperature or Hamiltonian.
+    mag_mean = only(Statistics.mean(ctx.measure.observables[:Magnetization]))
+    @test mag_mean ≈ 1.0
+end
+
+# ---------------------------------------------------------------------------
+
+@testset "Low-T MC magnetization ≈ 1 (bcc_2x2x2, T=0.01 eV)" begin
+    # The BCC Fe exchange coupling scale is ~1 eV (ground-state energy -(2+√3) eV/atom).
+    # At T = 0.01 eV (T/J ≈ 0.01) the ferromagnetic state is essentially frozen:
+    # virtually every Metropolis proposal that raises the energy is rejected.
+    T_low   = 0.01   # eV
+    n_therm = 200    # thermalization sweeps (starting from ferromagnetic state)
+    n_meas  = 200    # measurement sweeps
+
+    params = Dict(
+        :xml_path       => XML_2x2x2,
+        :T              => T_low,
+        :thermalization => n_therm,
+        :binsize        => 1,
+        :seed           => 1234,
+    )
+    mc  = JPhiSpinMC(params)
+
+    # Start from the ferromagnetic ground state (all spins along +z)
+    mc.spins .= 0.0
+    mc.spins[3, :] .= 1.0
+    JMCC._rebuild_zlm_cache!(mc)
+    mc.energy = mc.ham.j0 + JMCC._energy_from_instances(
+        mc.local_cache.instances[mc.active_instance_indices], mc.spins,
+    )
+
+    ctx = Carlo.MCContext{MersenneTwister}(params)
+
+    # Thermalization (state should remain near the ground state)
+    for _ in 1:n_therm
+        Carlo.sweep!(mc, ctx)
+    end
+
+    # Measurement: collect n_meas independent samples
+    for _ in 1:n_meas
+        Carlo.sweep!(mc, ctx)
+        Carlo.measure!(mc, ctx)
+    end
+
+    # At T << J the magnetization must stay near 1
+    mag_mean = only(Statistics.mean(ctx.measure.observables[:Magnetization]))
+    @test mag_mean ≈ 1.0 atol=0.05
 end
 
 # ---------------------------------------------------------------------------
