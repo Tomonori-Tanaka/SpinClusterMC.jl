@@ -226,6 +226,108 @@ end
 
 # ---------------------------------------------------------------------------
 
+@testset "SCE energy: reference path agrees with fast path for repeat=(2,2,2)" begin
+    # Verifies coupled_cluster_energy (reference) and _energy_from_instances (fast path)
+    # give the same result for non-uniform spins after the cross-tile interaction fix.
+    h = load_sce_hamiltonian(XML_2x2x2; repeat = (2, 2, 2))
+    rng = MersenneTwister(7)
+    spins = let s = randn(rng, 3, h.n_atoms)
+        for i in 1:h.n_atoms; s[:, i] ./= sqrt(sum(s[:, i].^2)); end
+        s
+    end
+
+    E_ref  = sce_energy(h, spins)
+    cache  = JMCC.build_local_energy_cache(h)
+    E_fast = h.j0 + JMCC._energy_from_instances(cache.instances, spins)
+
+    @test E_ref ≈ E_fast rtol = 1e-8
+
+    @testset "low-T MC from ferromagnetic state keeps magnetization near 1" begin
+        # Start from fully ferromagnetic base-cell spins and run low-temperature
+        # Metropolis updates on the repeat=(2,2,2) supercell.
+        init_spins = zeros(3, h.base_n_atoms)
+        init_spins[3, :] .= 1.0
+        params = Dict(
+            :xml_path       => XML_2x2x2,
+            :repeat         => (2, 2, 2),
+            :T              => 0.01,
+            :thermalization => 0,
+            :binsize        => 1,
+            :seed           => 20260417,
+            :initial_spins  => init_spins,
+        )
+        mc = JPhiSpinMC(params)
+        ctx = Carlo.MCContext{MersenneTwister}(params)
+        Carlo.init!(mc, ctx, params)
+
+        n_sweeps = 200
+        for _ in 1:n_sweeps
+            Carlo.sweep!(mc, ctx)
+            Carlo.measure!(mc, ctx)
+        end
+
+        mag_mean = only(Statistics.mean(ctx.measure.observables[:Magnetization]))
+        @test mag_mean > 0.95
+    end
+end
+
+# ---------------------------------------------------------------------------
+
+@testset "SCE interaction energy is extensive for repeat=(2,2,2)" begin
+    # (E - j0)/n_atoms for a periodically-tiled spin config must be
+    # independent of repeat size.
+    h1 = load_sce_hamiltonian(XML_2x2x2; repeat = (1, 1, 1))
+    h2 = load_sce_hamiltonian(XML_2x2x2; repeat = (2, 2, 2))
+
+    spins1 = zeros(3, h1.n_atoms); spins1[3, :] .= 1.0
+    spins2 = zeros(3, h2.n_atoms)
+    for ia in 1:h2.n_atoms
+        spins2[:, ia] = spins1[:, ((ia - 1) % h1.n_atoms) + 1]
+    end
+
+    E_int1 = sce_energy(h1, spins1) - h1.j0
+    E_int2 = sce_energy(h2, spins2) - h2.j0
+
+    @test E_int2 ≈ 8 * E_int1 rtol = 1e-8
+end
+
+# ---------------------------------------------------------------------------
+
+@testset "Cross-tile interaction energy detected (repeat=(2,2,2) bug regression)" begin
+    # Bug regression: with the old (buggy) code all cluster atoms were placed
+    # in the SAME tile, so inter-tile bonds were never evaluated.
+    # The two spin configurations below differ ONLY in the inter-tile bonds:
+    #   Config A: all spins +z  →  all bonds (intra + inter) are ferromagnetically aligned
+    #   Config B: tile 0 = +z, tiles 1–7 = +x  →  intra-tile bonds still FM,
+    #             but inter-tile bonds connect +z and +x (dot product = 0, not -1)
+    # With the bug:  E_A = E_B  (inter-tile bonds simply absent)
+    # After the fix: E_A < E_B  (inter-tile bonds penalize the misaligned config)
+    h = load_sce_hamiltonian(XML_2x2x2; repeat = (2, 2, 2))
+    n     = h.n_atoms        # 128
+    base_n = h.base_n_atoms  # 16
+
+    spins_A = zeros(3, n); spins_A[3, :] .= 1.0  # all +z
+
+    spins_B = zeros(3, n)
+    for ia in 1:n
+        tile = (ia - 1) ÷ base_n   # 0 for tile-0 atoms, 1-7 for the rest
+        if tile == 0
+            spins_B[3, ia] = 1.0   # +z
+        else
+            spins_B[1, ia] = 1.0   # +x
+        end
+    end
+
+    E_A = sce_energy(h, spins_A)
+    E_B = sce_energy(h, spins_B)
+
+    # The inter-tile bonds contribute negative energy for config A (FM) and zero for config B.
+    # So E_A must be strictly less than E_B.
+    @test E_A < E_B - 1e-6
+end
+
+# ---------------------------------------------------------------------------
+
 @testset "Metropolis checkpoint restart" begin
     # Strategy (mirrors Carlo.jl test_scheduler.jl):
     #   full run  : 100 sweeps, single pass   → results_full

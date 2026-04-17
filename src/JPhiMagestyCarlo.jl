@@ -342,6 +342,7 @@ function coupled_cluster_energy(
     map_sym::AbstractMatrix{Int};
     repeat::NTuple{3, Int} = (1, 1, 1),
     base_n_atoms::Int = size(map_sym, 1),
+    pos_frac::Union{Nothing, AbstractMatrix{Float64}} = nothing,
 )::Float64
     n_trans = size(map_sym, 2)
     n1, n2, n3 = repeat
@@ -358,10 +359,26 @@ function coupled_cluster_energy(
             for ti in 0:(n1 - 1)
                 for t in 1:n_trans
                     translated_base = Int[map_sym[atom, t] for atom in cbc.atoms]
-                    translated_atoms = Int[
-                        supercell_atom_index(ba, ti, tj, tk, base_n_atoms, repeat) for
-                        ba in translated_base
-                    ]
+                    if pos_frac !== nothing
+                        # pos_frac is expected to be BASE-CELL fractional positions (3×base_n).
+                        p_ref = pos_frac[:, translated_base[1]]
+                        translated_atoms = Vector{Int}(undef, length(translated_base))
+                        for (k, ba) in enumerate(translated_base)
+                            p = pos_frac[:, ba]
+                            w1 = round(Int, p[1] - p_ref[1])
+                            w2 = round(Int, p[2] - p_ref[2])
+                            w3 = round(Int, p[3] - p_ref[3])
+                            translated_atoms[k] = supercell_atom_index(
+                                ba, mod(ti + w1, n1), mod(tj + w2, n2), mod(tk + w3, n3),
+                                base_n_atoms, repeat,
+                            )
+                        end
+                    else
+                        translated_atoms = Int[
+                            supercell_atom_index(ba, ti, tj, tk, base_n_atoms, repeat) for
+                            ba in translated_base
+                        ]
+                    end
                     atoms_sorted = sort(translated_atoms)
                     pair = (atoms_sorted, cbc.ls)
                     pair in searched_pairs && continue
@@ -459,16 +476,29 @@ function _build_cluster_instances(h::SCEHamiltonian)::Vector{ClusterInstance}
                     for ti in 0:(n1 - 1)
                         for t in 1:n_trans
                             translated_base = Int[h.map_sym[atom, t] for atom in cbc.atoms]
-                            translated_atoms = Int[
-                                supercell_atom_index(
+                            # Each atom may belong to a different tile: compute tile offset
+                            # from the minimum-image wrapping vector relative to atom[1].
+                            # h.pos_frac[:,ba] stores supercell fractional positions (i.e.
+                            # base-cell frac / repeat). Multiply back by repeat to get base-cell
+                            # fractional coords before rounding to the wrapping integer.
+                            n1f, n2f, n3f = Float64(n1), Float64(n2), Float64(n3)
+                            p_ref = h.pos_frac[:, translated_base[1]]
+                            f_ref = (p_ref[1] * n1f, p_ref[2] * n2f, p_ref[3] * n3f)
+                            translated_atoms = Vector{Int}(undef, length(translated_base))
+                            for (k, ba) in enumerate(translated_base)
+                                p = h.pos_frac[:, ba]
+                                w1 = round(Int, p[1] * n1f - f_ref[1])
+                                w2 = round(Int, p[2] * n2f - f_ref[2])
+                                w3 = round(Int, p[3] * n3f - f_ref[3])
+                                translated_atoms[k] = supercell_atom_index(
                                     ba,
-                                    ti,
-                                    tj,
-                                    tk,
+                                    mod(ti + w1, n1),
+                                    mod(tj + w2, n2),
+                                    mod(tk + w3, n3),
                                     h.base_n_atoms,
                                     h.repeat,
-                                ) for ba in translated_base
-                            ]
+                                )
+                            end
                             atoms_sorted = sort(translated_atoms)
                             pair = (atoms_sorted, cbc.ls)
                             pair in searched_pairs && continue
@@ -576,6 +606,10 @@ supercell atoms (`a` → column `a`). Only the column count is checked here; eac
 """
 function sce_energy(h::SCEHamiltonian, spin_directions::AbstractMatrix{<:Real})::Float64
     E = h.j0
+    n1, n2, n3 = h.repeat
+    # Recover base-cell fractional positions from supercell positions (tile-(0,0,0) block).
+    # h.pos_frac[:,ba] for ba in 1:base_n_atoms = base_frac / (n1,n2,n3).
+    base_pos = h.pos_frac[:, 1:h.base_n_atoms] .* [Float64(n1); Float64(n2); Float64(n3)]
     for (s, group) in enumerate(h.salc_list)
         js = h.jphi[s]
         for cbc in group
@@ -585,6 +619,7 @@ function sce_energy(h::SCEHamiltonian, spin_directions::AbstractMatrix{<:Real}):
                 h.map_sym;
                 repeat = h.repeat,
                 base_n_atoms = h.base_n_atoms,
+                pos_frac = base_pos,
             )
         end
     end
