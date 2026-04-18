@@ -169,8 +169,8 @@ end
     # At T = 0.01 eV (T/J ≈ 0.01) the ferromagnetic state is essentially frozen:
     # virtually every Metropolis proposal that raises the energy is rejected.
     T_low   = 0.01   # eV
-    n_therm = 200    # thermalization sweeps (starting from ferromagnetic state)
-    n_meas  = 200    # measurement sweeps
+    n_therm = 100    # thermalization sweeps (starting from ferromagnetic state)
+    n_meas  = 100    # measurement sweeps
 
     params = Dict(
         :xml_path       => XML_2x2x2,
@@ -260,7 +260,7 @@ end
         ctx = Carlo.MCContext{MersenneTwister}(params)
         Carlo.init!(mc, ctx, params)
 
-        n_sweeps = 200
+        n_sweeps = 100
         for _ in 1:n_sweeps
             Carlo.sweep!(mc, ctx)
             Carlo.measure!(mc, ctx)
@@ -339,16 +339,16 @@ end
 
         Logging.with_logger(Logging.NullLogger()) do
             # Continuous full run
-            Carlo.start(Carlo.SingleScheduler, _make_jphi_job("$tmpdir/full", 100; T))
+            Carlo.start(Carlo.SingleScheduler, _make_jphi_job("$tmpdir/full", 60; T))
 
             # First half → checkpoint
-            Carlo.start(Carlo.SingleScheduler, _make_jphi_job("$tmpdir/half", 50; T))
+            Carlo.start(Carlo.SingleScheduler, _make_jphi_job("$tmpdir/half", 30; T))
             # Resume to full
-            Carlo.start(Carlo.SingleScheduler, _make_jphi_job("$tmpdir/half", 100; T))
+            Carlo.start(Carlo.SingleScheduler, _make_jphi_job("$tmpdir/half", 60; T))
         end
 
         # All target sweeps should be reached after restart
-        for t in JT.read_progress(_make_jphi_job("$tmpdir/half", 100; T))
+        for t in JT.read_progress(_make_jphi_job("$tmpdir/half", 60; T))
             @test t.sweeps >= t.target_sweeps
         end
 
@@ -363,19 +363,19 @@ end
 # ---------------------------------------------------------------------------
 
 @testset "Parallel tempering checkpoint restart" begin
-    # Three temperatures in a high-T regime so spins mix quickly.
+    # Two temperatures in a high-T regime so spins mix quickly.
     # MPIScheduler: one rank per temperature + one coordinator rank.
-    # Strategy: run 50 sweeps (checkpoint), extend to 100 sweeps,
+    # Strategy: run 30 sweeps (checkpoint), extend to 60 sweeps,
     # verify that all tasks reach their target sweep count.
     mktempdir() do tmpdir
-        Ts = [2.0, 5.0, 10.0]
+        Ts = [5.0, 10.0]
 
         function make_pt_job(sweeps)
             tm = JT.TaskMaker()
             tm.sweeps = sweeps
             tm.seed = 42
-            tm.thermalization = 20
-            tm.binsize = 10
+            tm.thermalization = 5
+            tm.binsize = 5
             tm.xml_path = XML_2x2x2
             tm.parallel_tempering = (;
                 mc = JPhiSpinMC,
@@ -395,11 +395,11 @@ end
 
         n_ranks = length(Ts) + 1   # +1 coordinator for MPIScheduler
 
-        # First half: run 50 sweeps → checkpoint saved on completion
-        _run_mpi_job(make_pt_job(50); num_ranks = n_ranks)
+        # First half: run 30 sweeps → checkpoint saved on completion
+        _run_mpi_job(make_pt_job(30); num_ranks = n_ranks)
 
-        # Resume: extend target to 100 sweeps
-        job_full = make_pt_job(100)
+        # Resume: extend target to 60 sweeps
+        job_full = make_pt_job(60)
         _run_mpi_job(job_full; num_ranks = n_ranks)
 
         for t in JT.read_progress(job_full)

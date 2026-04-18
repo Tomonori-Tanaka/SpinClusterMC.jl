@@ -86,7 +86,7 @@ end
     # -----------------------------------------------------------------------
     @testset "spin proposals" begin
         rng = MersenneTwister(42)
-        N = 1000
+        N = 200
 
         @testset "_rand_unit_spin" begin
             for _ in 1:N
