@@ -18,6 +18,7 @@ using MPI
 using EzXML
 using LinearAlgebra
 using Random
+import Serialization
 
 using Magesty.Basis: CoupledBasis_with_coefficient
 using Magesty.MySphericalHarmonics: Zₗₘ_unsafe
@@ -743,6 +744,12 @@ mutable struct JPhiSpinMC <: AbstractMC
     # Renormalize all spins (and rebuild zlm cache) every this many sweeps. 0 = disabled.
     renorm_every::Int
     sweep_count::Int
+    # Reconstruction keys stored for lightweight MPI serialization (Carlo PT gather).
+    # ham and local_cache are deterministically derived from these, so they are
+    # excluded from the serialized representation to avoid OOM on the root rank.
+    xml_path::String
+    repeat::NTuple{3,Int}
+    enabled_bodies::Union{Nothing,Vector{Int}}
 end
 
 @inline interaction_partners(mc::JPhiSpinMC, atom::Int)::Vector{Int} =
@@ -780,6 +787,11 @@ function JPhiSpinMC(params::AbstractDict)
     else
         1000
     end
+    enabled_bodies = if haskey(params, :enabled_bodies)
+        Int.(collect(params[:enabled_bodies]))
+    else
+        nothing
+    end
     return JPhiSpinMC(
         T,
         ham,
@@ -797,6 +809,9 @@ function JPhiSpinMC(params::AbstractDict)
         spin_theta_max,
         renorm_every,
         0,
+        xml,
+        rep,
+        enabled_bodies,
     )
 end
 
@@ -1325,6 +1340,69 @@ function Carlo.register_evaluables(::Type{JPhiSpinMC}, eval::AbstractEvaluator, 
         return n * mag2 / T
     end
     return nothing
+end
+
+# --- Lightweight MPI serialization for Carlo parallel-tempering gather ---
+#
+# Carlo's PT checkpoint gathers the full MC object from all ranks to rank 0 via
+# MPI.gather / Julia Serialization.  Without this override, JPhiSpinMC serializes
+# ham::SCEHamiltonian and local_cache::LocalEnergyCache (both O(GB) for large SCE
+# bases), causing rank 0 to hold 32+ copies and run OOM on a 256 GiB node.
+#
+# Only the truly mutable simulation state (T, spins, energy) plus the reconstruction
+# keys (xml_path, repeat, enabled_bodies) are written; everything else is rebuilt
+# deterministically on deserialization.
+
+function Serialization.serialize(s::Serialization.AbstractSerializer, mc::JPhiSpinMC)
+    Serialization.serialize_type(s, JPhiSpinMC, false)
+    Serialization.serialize(s, mc.T)
+    Serialization.serialize(s, mc.spins)
+    Serialization.serialize(s, mc.energy)
+    Serialization.serialize(s, mc.xml_path)
+    Serialization.serialize(s, mc.repeat)
+    Serialization.serialize(s, mc.spin_theta_max)
+    Serialization.serialize(s, mc.renorm_every)
+    Serialization.serialize(s, mc.sweep_count)
+    Serialization.serialize(s, mc.enabled_bodies)
+end
+
+function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{JPhiSpinMC})
+    T            = Serialization.deserialize(s)::Float64
+    spins        = Serialization.deserialize(s)::Matrix{Float64}
+    energy       = Serialization.deserialize(s)::Float64
+    xml_path     = Serialization.deserialize(s)::String
+    repeat       = Serialization.deserialize(s)::NTuple{3,Int}
+    spin_theta_max = Serialization.deserialize(s)
+    renorm_every = Serialization.deserialize(s)::Int
+    sweep_count  = Serialization.deserialize(s)::Int
+    enabled_bodies = Serialization.deserialize(s)
+
+    ham   = load_sce_hamiltonian(xml_path; repeat = repeat)
+    cache = build_local_energy_cache(ham)
+
+    active_body_indices = if enabled_bodies === nothing
+        collect(eachindex(cache.body_list))
+    else
+        req = Int.(collect(enabled_bodies))
+        [i for (i, b) in enumerate(cache.body_list) if b in req]
+    end
+    active_instance_indices   = _active_instance_indices(cache, active_body_indices)
+    related_instances_by_atom = _build_related_instances_by_atom(cache, active_body_indices, ham.n_atoms)
+    max_l     = _max_l_in_instances(cache.instances)
+    max_sites = _max_sites_in_instances(cache.instances)
+    zlm_cache = _alloc_zlm_cache(ham.n_atoms, max_l)
+    zlm_row_buf = Vector{Float64}(undef, (max_l + 1)^2)
+
+    mc = JPhiSpinMC(
+        T, ham, spins, energy, cache,
+        active_body_indices, active_instance_indices, related_instances_by_atom,
+        max_l, zlm_cache, zlm_row_buf,
+        Vector{Int}(undef, max_sites), Vector{Int}(undef, max_sites),
+        spin_theta_max, renorm_every, sweep_count,
+        xml_path, repeat, enabled_bodies,
+    )
+    _rebuild_zlm_cache!(mc)
+    return mc
 end
 
 function Carlo.write_checkpoint(mc::JPhiSpinMC, out::HDF5.Group)
