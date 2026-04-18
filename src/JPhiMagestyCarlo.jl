@@ -360,44 +360,15 @@ function _mpi_build_ham_and_cache(
     if haskey(_HAM_CACHE, key)
         return _HAM_CACHE[key], _ECACHE_CACHE[key]
     end
-
-    if !MPI.Initialized() || MPI.Comm_size(MPI.COMM_WORLD) == 1
-        ham   = load_sce_hamiltonian(xml_path; repeat = rep)
-        cache = build_local_energy_cache(ham)
-        _HAM_CACHE[key]    = ham
-        _ECACHE_CACHE[key] = cache
-        return ham, cache
-    end
-
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-
-    local data::Vector{UInt8}
-    if rank == 0
-        ham   = load_sce_hamiltonian(xml_path; repeat = rep)
-        cache = build_local_energy_cache(ham)
-        buf   = IOBuffer()
-        Serialization.serialize(buf, ham)
-        Serialization.serialize(buf, cache)
-        data  = take!(buf)
-    end
-
-    # Broadcast byte-count so non-root ranks can allocate the receive buffer.
-    n_ref = Ref(rank == 0 ? Int64(length(data)) : Int64(0))
-    MPI.Bcast!(n_ref, comm; root = 0)
-
-    if rank != 0
-        data = Vector{UInt8}(undef, n_ref[])
-    end
-
-    MPI.Bcast!(data, comm; root = 0)
-
-    if rank != 0
-        buf   = IOBuffer(data)
-        ham   = Serialization.deserialize(buf)::SCEHamiltonian
-        cache = Serialization.deserialize(buf)::LocalEnergyCache
-    end
-
+    # Each MPI rank builds its own copy in parallel.  Broadcasting via
+    # Julia Serialization is impractical here: the object graph (millions of
+    # ClusterInstance nodes with shared cbc references) takes longer to
+    # serialize than to rebuild from XML, and the broadcast buffer itself
+    # requires a second copy on every rank.  The process-local cache below
+    # only prevents redundant rebuilds *within the same process* (e.g. from
+    # Carlo.register_evaluables calling load_sce_hamiltonian a second time).
+    ham   = load_sce_hamiltonian(xml_path; repeat = rep)
+    cache = build_local_energy_cache(ham)
     _HAM_CACHE[key]    = ham
     _ECACHE_CACHE[key] = cache
     return ham, cache
