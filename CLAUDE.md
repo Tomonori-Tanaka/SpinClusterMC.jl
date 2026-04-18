@@ -11,6 +11,7 @@ Prioritize numerical correctness, reproducibility, and physical consistency over
   1. a brief explanation of why results may change,
   2. a regression or validation test,
   3. an update to docs/examples if user-facing.
+- Do not push to github
 
   ## Implementation conventions
   - Avoid hidden global state.
