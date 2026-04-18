@@ -25,6 +25,9 @@ Random = "1.11.0"
 Serialization = "1.11.0"
 julia = "1.12"
 
+[sources]
+Magesty = {url = "https://github.com/Tomonori-Tanaka/Magesty.jl"}
+
 [extras]
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
