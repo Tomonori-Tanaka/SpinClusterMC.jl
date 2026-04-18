@@ -13,3 +13,7 @@ JuliaLocalPreferences.toml
 *.results.json
 
 *.code-workspace
+.vscode/
+.claude/settings.local.json
+
+.DS_Store
