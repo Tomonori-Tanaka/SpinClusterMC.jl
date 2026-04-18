@@ -3,6 +3,3 @@ Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 LiveServer = "16fef848-5104-11e9-1b77-fb7a48bbb589"
 SpinClusterMC = "e9b40308-012f-49ab-9d45-cb028b7a04e4"
 
-[sources]
-Magesty = {url = "https://github.com/Tomonori-Tanaka/Magesty.jl"}
-
