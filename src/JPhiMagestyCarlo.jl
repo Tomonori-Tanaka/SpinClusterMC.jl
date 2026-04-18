@@ -243,6 +243,16 @@ struct LocalEnergyCache
     partners_by_atom_by_body::Vector{Vector{Vector{Int}}}
 end
 
+# Process-local cache for SCEHamiltonian and LocalEnergyCache.
+# Justified as a performance necessity: on a shared-memory node with 33 MPI ranks,
+# simultaneous construction of LocalEnergyCache (12+ minutes, multi-GB peak alloc
+# per rank) causes total peak memory to exceed node capacity.  Each MPI rank is a
+# separate OS process so this cache is not cross-rank shared memory — it only avoids
+# redundant work within the same process (e.g. register_evaluables calling
+# load_sce_hamiltonian after JPhiSpinMC is already constructed).
+const _HAM_CACHE    = Dict{Tuple{String,NTuple{3,Int}}, SCEHamiltonian}()
+const _ECACHE_CACHE = Dict{Tuple{String,NTuple{3,Int}}, LocalEnergyCache}()
+
 """
 Return `(4π)^(n_sites/2)` normalization used for cluster contributions.
 """
@@ -325,6 +335,72 @@ function load_sce_hamiltonian(
         sys.map_sym,
         sys.n_trans,
     )
+end
+
+"""
+    _mpi_build_ham_and_cache(xml_path, rep) -> (SCEHamiltonian, LocalEnergyCache)
+
+MPI-aware constructor: only MPI rank 0 (global) builds from XML; all other ranks
+receive the result via a single `MPI_Bcast` of the serialized bytes.
+
+On a shared-memory node with N ranks, the naive approach would run
+`load_sce_hamiltonian` + `build_local_energy_cache` N times simultaneously,
+causing N× the peak construction memory.  Here only rank 0 runs the expensive
+path; the others wait and deserialize from the broadcast buffer.
+
+Result is stored in the process-local `_HAM_CACHE` / `_ECACHE_CACHE` so that
+subsequent calls within the same process (e.g. `Carlo.register_evaluables`) skip
+both the MPI coordination and the XML parse.
+"""
+function _mpi_build_ham_and_cache(
+    xml_path::String,
+    rep::NTuple{3, Int},
+)::Tuple{SCEHamiltonian, LocalEnergyCache}
+    key = (xml_path, rep)
+    if haskey(_HAM_CACHE, key)
+        return _HAM_CACHE[key], _ECACHE_CACHE[key]
+    end
+
+    if !MPI.Initialized() || MPI.Comm_size(MPI.COMM_WORLD) == 1
+        ham   = load_sce_hamiltonian(xml_path; repeat = rep)
+        cache = build_local_energy_cache(ham)
+        _HAM_CACHE[key]    = ham
+        _ECACHE_CACHE[key] = cache
+        return ham, cache
+    end
+
+    comm = MPI.COMM_WORLD
+    rank = MPI.Comm_rank(comm)
+
+    local data::Vector{UInt8}
+    if rank == 0
+        ham   = load_sce_hamiltonian(xml_path; repeat = rep)
+        cache = build_local_energy_cache(ham)
+        buf   = IOBuffer()
+        Serialization.serialize(buf, ham)
+        Serialization.serialize(buf, cache)
+        data  = take!(buf)
+    end
+
+    # Broadcast byte-count so non-root ranks can allocate the receive buffer.
+    n_ref = Ref(rank == 0 ? Int64(length(data)) : Int64(0))
+    MPI.Bcast!(n_ref, comm; root = 0)
+
+    if rank != 0
+        data = Vector{UInt8}(undef, n_ref[])
+    end
+
+    MPI.Bcast!(data, comm; root = 0)
+
+    if rank != 0
+        buf   = IOBuffer(data)
+        ham   = Serialization.deserialize(buf)::SCEHamiltonian
+        cache = Serialization.deserialize(buf)::LocalEnergyCache
+    end
+
+    _HAM_CACHE[key]    = ham
+    _ECACHE_CACHE[key] = cache
+    return ham, cache
 end
 
 """
@@ -761,9 +837,9 @@ end
 function JPhiSpinMC(params::AbstractDict)
     xml = params[:xml_path]
     rep = _parse_repeat_param(params)
-    ham = load_sce_hamiltonian(xml; repeat = rep)
+    # MPI-aware: only rank 0 builds from XML; all ranks share via Bcast.
+    ham, cache = _mpi_build_ham_and_cache(xml, rep)
     T = Float64(params[:T])
-    cache = build_local_energy_cache(ham)
     active_body_indices = _parse_enabled_body_indices(params, cache.body_list)
     active_instance_indices = _active_instance_indices(cache, active_body_indices)
     related_instances_by_atom = _build_related_instances_by_atom(cache, active_body_indices, ham.n_atoms)
@@ -1329,7 +1405,14 @@ end
 
 function Carlo.register_evaluables(::Type{JPhiSpinMC}, eval::AbstractEvaluator, params::AbstractDict)
     T = Float64(params[:T])
-    n = load_sce_hamiltonian(params[:xml_path]; repeat = _parse_repeat_param(params)).n_atoms
+    key = (params[:xml_path], _parse_repeat_param(params))
+    # Use the process-local cache if available (populated by JPhiSpinMC constructor),
+    # avoiding a redundant full XML parse + cluster enumeration on every rank.
+    n = if haskey(_HAM_CACHE, key)
+        _HAM_CACHE[key].n_atoms
+    else
+        load_sce_hamiltonian(key[1]; repeat = key[2]).n_atoms
+    end
     evaluate!(eval, :SpecificHeat, (:Energy2, :Energy)) do e2, e
         return n * (e2 - e^2) / T^2
     end
@@ -1377,8 +1460,10 @@ function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{J
     sweep_count  = Serialization.deserialize(s)::Int
     enabled_bodies = Serialization.deserialize(s)
 
-    ham   = load_sce_hamiltonian(xml_path; repeat = repeat)
-    cache = build_local_energy_cache(ham)
+    # Use the process-local cache (populated at startup via _mpi_build_ham_and_cache).
+    # On rank 0, this is called 32 times during Carlo's PT checkpoint gather;
+    # the cache ensures ham/local_cache are NOT rebuilt 32 times.
+    ham, cache = _mpi_build_ham_and_cache(xml_path, repeat)
 
     active_body_indices = if enabled_bodies === nothing
         collect(eachindex(cache.body_list))
