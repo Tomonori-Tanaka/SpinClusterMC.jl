@@ -207,6 +207,10 @@ Concrete translated cluster term used in MC energy evaluation.
 - `prefactor`: Pre-multiplied scalar factor (`jphi * multiplicity * scaling`).
 - `dims`: Per-site tensor dimensions (`dims[k] = 2*cbc.ls[k] + 1`).
 - `strides`: Flattened tensor strides (length `N+1`, `N = length(atoms)`).
+- `coeff_flat`: Column-major flattened copy of `cbc.coeff_tensor` as `Vector{Float64}`.
+  Avoids type instability: `cbc.coeff_tensor::AbstractArray` forces dynamic dispatch on
+  every indexing call in the hot sweep loop.
+- `Mf_size`: Last dimension of `coeff_tensor` (number of Mf components).
 """
 struct ClusterInstance
     atoms::Vector{Int}
@@ -215,6 +219,9 @@ struct ClusterInstance
     # Precomputed from cbc.ls to avoid per-call allocations in the hot sweep path.
     dims::Vector{Int}    # dims[k] = 2*cbc.ls[k]+1
     strides::Vector{Int} # tensor strides, length N+1; strides[k] = prod(dims[1:k-1])
+    # Concrete-typed copy of cbc.coeff_tensor (which is AbstractArray, causing boxing).
+    coeff_flat::Vector{Float64}
+    Mf_size::Int
 end
 
 """
@@ -553,6 +560,9 @@ function _build_cluster_instances(h::SCEHamiltonian)::Vector{ClusterInstance}
                             push!(searched_pairs, pair)
                             inst_dims = [2 * l + 1 for l in cbc.ls]
                             inst_strides = _compute_instance_strides(cbc.ls)
+                            N_cbc = length(cbc.atoms)
+                            inst_Mf_size = size(cbc.coeff_tensor, N_cbc + 1)
+                            inst_coeff_flat = vec(collect(Float64, cbc.coeff_tensor))
                             push!(
                                 instances,
                                 ClusterInstance(
@@ -561,6 +571,8 @@ function _build_cluster_instances(h::SCEHamiltonian)::Vector{ClusterInstance}
                                     js * cbc.multiplicity * scaling,
                                     inst_dims,
                                     inst_strides,
+                                    inst_coeff_flat,
+                                    inst_Mf_size,
                                 ),
                             )
                         end
@@ -1087,19 +1099,25 @@ Evaluate one instance contraction using precomputed per-atom `Z_lm` cache.
     cbc = inst.cbc
     N = length(inst.atoms)
     tensor_result = 0.0
-    Mf_size = size(cbc.coeff_tensor, N + 1)
+    Mf_size = inst.Mf_size
+    coeff_flat = inst.coeff_flat
+    total_spatial = inst.strides[N + 1]
 
     for mf_idx in 1:Mf_size
         mf_contribution = 0.0
-        for site_idx_tuple in CartesianIndices(Tuple(inst.dims))
+        base_mf = 1 + (mf_idx - 1) * total_spatial
+        for combo_id in 0:(total_spatial - 1)
             product = 1.0
-            @inbounds for (site_idx, m_idx) in enumerate(site_idx_tuple.I)
-                atom = inst.atoms[site_idx]
-                l = cbc.ls[site_idx]
+            tmp = combo_id
+            @inbounds for k in 1:N
+                d = inst.dims[k]
+                m_idx = tmp % d + 1
+                tmp ÷= d
+                atom = inst.atoms[k]
+                l = cbc.ls[k]
                 product *= zlm_cache[atom, _zlm_col(l, m_idx)]
             end
-            tensor_idx = (site_idx_tuple.I..., mf_idx)
-            mf_contribution += cbc.coeff_tensor[tensor_idx...] * product
+            mf_contribution += coeff_flat[base_mf + combo_id] * product
         end
         tensor_result += cbc.coefficient[mf_idx] * mf_contribution
     end
@@ -1145,8 +1163,8 @@ Strides and dims are read from `inst.strides` / `inst.dims` (precomputed at buil
     dims_sitepos = 2 * changed_l + 1
     changed_col_base = changed_l * changed_l
 
-    Mf_size = size(cbc.coeff_tensor, N + 1)
-    coeff_tensor = cbc.coeff_tensor
+    Mf_size = inst.Mf_size
+    coeff_flat = inst.coeff_flat
     tensor_result = 0.0
 
     if n_other == 0
@@ -1155,7 +1173,7 @@ Strides and dims are read from `inst.strides` / `inst.dims` (precomputed at buil
             base_mf = 1 + (mf_idx - 1) * strides[N + 1]
             @simd for mchg_idx in 1:dims_sitepos
                 mf_contribution +=
-                    coeff_tensor[base_mf + (mchg_idx - 1) * stride_changed] *
+                    coeff_flat[base_mf + (mchg_idx - 1) * stride_changed] *
                     zlm_cache[changed_atom, changed_col_base + mchg_idx]
             end
             tensor_result += cbc.coefficient[mf_idx] * mf_contribution
@@ -1192,7 +1210,7 @@ Strides and dims are read from `inst.strides` / `inst.dims` (precomputed at buil
             inner = 0.0
             @simd for mchg_idx in 1:dims_sitepos
                 inner +=
-                    coeff_tensor[base_without_changed + (mchg_idx - 1) * stride_changed] *
+                    coeff_flat[base_without_changed + (mchg_idx - 1) * stride_changed] *
                     zlm_cache[changed_atom, changed_col_base + mchg_idx]
             end
             mf_contribution += product_other * inner
