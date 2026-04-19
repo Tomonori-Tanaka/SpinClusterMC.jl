@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Examples · SpinClusterMC.jl</title><meta name="title" content="Examples · SpinClusterMC.jl"/><meta property="og:title" content="Examples · SpinClusterMC.jl"/><meta property="twitter:title" content="Examples · SpinClusterMC.jl"/><meta name="description" content="Documentation for SpinClusterMC.jl."/><meta property="og:description" content="Documentation for SpinClusterMC.jl."/><meta property="twitter:description" content="Documentation for SpinClusterMC.jl."/><meta property="og:url" content="https://Tomonori-Tanaka.github.io/SpinClusterMC.jl/examples/"/><meta property="twitter:url" content="https://Tomonori-Tanaka.github.io/SpinClusterMC.jl/examples/"/><link rel="canonical" href="https://Tomonori-Tanaka.github.io/SpinClusterMC.jl/examples/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">SpinClusterMC.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../tutorial/">Tutorial</a></li><li class="is-active"><a class="tocitem" href>Examples</a><ul class="internal"><li><a class="tocitem" href="#bcc-Fe-—-Metropolis"><span>bcc Fe — Metropolis</span></a></li><li><a class="tocitem" href="#bcc-Fe-—-Parallel-Tempering"><span>bcc Fe — Parallel Tempering</span></a></li><li><a class="tocitem" href="#Direct-energy-evaluation-(no-MC)"><span>Direct energy evaluation (no MC)</span></a></li></ul></li><li><a class="tocitem" href="../api/">API Reference</a></li><li><a class="tocitem" href="../technical_notes/">Technical Notes</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Examples</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Examples</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/Tomonori-Tanaka/SpinClusterMC.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Examples"><a class="docs-heading-anchor" href="#Examples">Examples</a><a id="Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Examples" title="Permalink"></a></h1><p>Ready-to-run job scripts are in the <a href="https://github.com/Tomonori-Tanaka/SpinClusterMC.jl/tree/main/examples"><code>examples/</code></a> directory.</p><h2 id="bcc-Fe-—-Metropolis"><a class="docs-heading-anchor" href="#bcc-Fe-—-Metropolis">bcc Fe — Metropolis</a><a id="bcc-Fe-—-Metropolis-1"></a><a class="docs-heading-anchor-permalink" href="#bcc-Fe-—-Metropolis" title="Permalink"></a></h2><p>Runs 8 independent Metropolis simulations at temperatures from 100 K to 1500 K for a BCC iron system described by an SCE Hamiltonian from Magesty.jl.</p><p><strong>Location:</strong> <code>examples/bccFe/metropolis/</code></p><pre><code class="language-julia hljs"># examples/bccFe/metropolis/example_job.jl
+using Carlo
+using Carlo.JobTools
+using SpinClusterMC.JPhiMagestyCarlo
+
+const k_B_eV_per_K = 8.617333262e-5
+
+tm = TaskMaker()
+tm.seed           = 1234
+tm.sweeps         = 500_000
+tm.thermalization = 50_000
+tm.binsize        = 50
+tm.spin_theta_max = 0.5
+tm.supercell      = (2, 2, 2)   # 16-atom base cell → 128 atoms
+
+xml = joinpath(@__DIR__, &quot;jphi.xml&quot;)
+for T_K in range(100.0, 1500.0, length = 8)
+    tm.T        = k_B_eV_per_K * T_K
+    tm.xml_path = xml
+    task(tm)
+end
+
+job = JobInfo(
+    splitext(@__FILE__)[1],
+    JPhiSpinMC;
+    run_time        = &quot;04:00:00&quot;,
+    checkpoint_time = &quot;01:00:00&quot;,
+    tasks           = make_tasks(tm),
+)
+start(job, ARGS)</code></pre><h3 id="Running"><a class="docs-heading-anchor" href="#Running">Running</a><a id="Running-1"></a><a class="docs-heading-anchor-permalink" href="#Running" title="Permalink"></a></h3><pre><code class="language-bash hljs"># Single process (tasks run sequentially)
+julia example_job.jl run
+
+# MPI (tasks run in parallel)
+mpiexec -n 8 julia example_job.jl run
+
+# Resume from checkpoint
+julia example_job.jl run
+
+# Restart from scratch
+julia example_job.jl run --restart</code></pre><h3 id="Visualization"><a class="docs-heading-anchor" href="#Visualization">Visualization</a><a id="Visualization-1"></a><a class="docs-heading-anchor-permalink" href="#Visualization" title="Permalink"></a></h3><pre><code class="language-julia hljs"># examples/bccFe/metropolis/visualize.jl
+using Plots
+using DataFrames
+using Carlo.ResultTools
+
+const k_B_eV_per_K = 8.617333262e-5
+
+df   = DataFrame(ResultTools.dataframe(&quot;example_job.results.json&quot;))
+T_K  = df.T ./ k_B_eV_per_K
+
+p1 = plot(T_K, df.SpecificHeat;
+    xlabel = &quot;Temperature (K)&quot;,
+    ylabel = &quot;Specific Heat&quot;,
+    marker = :circle,
+)
+
+p2 = plot(T_K, df.Magnetization;
+    xlabel = &quot;Temperature (K)&quot;,
+    ylabel = &quot;Magnetization&quot;,
+    marker = :circle,
+)
+
+plot(p1, p2; layout = (2, 1))</code></pre><hr/><h2 id="bcc-Fe-—-Parallel-Tempering"><a class="docs-heading-anchor" href="#bcc-Fe-—-Parallel-Tempering">bcc Fe — Parallel Tempering</a><a id="bcc-Fe-—-Parallel-Tempering-1"></a><a class="docs-heading-anchor-permalink" href="#bcc-Fe-—-Parallel-Tempering" title="Permalink"></a></h2><p>Uses replica-exchange MC with 8 temperatures between 100 K and 1500 K. A single Carlo task contains the full temperature chain; each MPI rank handles one replica.</p><p><strong>Location:</strong> <code>examples/bccFe/parallel_tempering/</code></p><pre><code class="language-julia hljs"># examples/bccFe/parallel_tempering/example_job.jl
+using Carlo
+using Carlo.JobTools
+using SpinClusterMC.JPhiMagestyCarlo
+
+const k_B_eV_per_K = 8.617333262e-5
+
+tm = TaskMaker()
+tm.seed           = 1234
+tm.sweeps         = 500_000
+tm.thermalization = 5_000
+tm.binsize        = 100
+tm.spin_theta_max = 0.5
+tm.xml_path       = joinpath(@__DIR__, &quot;jphi.xml&quot;)
+tm.supercell      = (2, 2, 2)
+
+Ts_K  = range(100.0, 1500.0; length = 8)
+Ts_mc = collect(k_B_eV_per_K .* Ts_K)
+
+tm.parallel_tempering = (
+    mc        = JPhiSpinMC,
+    parameter = :T,
+    values    = Ts_mc,
+    interval  = 20,
+)
+
+task(tm)
+
+job = JobInfo(
+    splitext(@__FILE__)[1],
+    ParallelTemperingMC;
+    run_time        = &quot;04:00:00&quot;,
+    checkpoint_time = &quot;01:00:00&quot;,
+    tasks           = make_tasks(tm),
+    ranks_per_run   = length(Ts_mc),
+)
+start(job, ARGS)</code></pre><h3 id="Running-2"><a class="docs-heading-anchor" href="#Running-2">Running</a><a class="docs-heading-anchor-permalink" href="#Running-2" title="Permalink"></a></h3><p>Parallel tempering requires exactly one MPI rank per temperature:</p><pre><code class="language-bash hljs">mpiexec -n 8 julia example_job.jl run</code></pre><h3 id="Reading-PT-results"><a class="docs-heading-anchor" href="#Reading-PT-results">Reading PT results</a><a id="Reading-PT-results-1"></a><a class="docs-heading-anchor-permalink" href="#Reading-PT-results" title="Permalink"></a></h3><pre><code class="language-julia hljs">using DataFrames, Carlo.ResultTools
+
+df = DataFrame(ResultTools.dataframe(&quot;example_job.results.json&quot;))
+
+# PT results: observables are vectors across the temperature chain
+pt    = df.parallel_tempering[1]
+T_K   = Float64.(pt[&quot;values&quot;]) ./ 8.617333262e-5
+
+cv     = getfield.(df.SpecificHeat[1], :val)
+cv_err = getfield.(df.SpecificHeat[1], :err)
+mag    = getfield.(df.Magnetization[1], :val)</code></pre><hr/><h2 id="Direct-energy-evaluation-(no-MC)"><a class="docs-heading-anchor" href="#Direct-energy-evaluation-(no-MC)">Direct energy evaluation (no MC)</a><a id="Direct-energy-evaluation-(no-MC)-1"></a><a class="docs-heading-anchor-permalink" href="#Direct-energy-evaluation-(no-MC)" title="Permalink"></a></h2><p><code>SCEHamiltonian</code> and <code>sce_energy</code> can be used independently of Carlo.jl for quick energy calculations on fixed spin configurations:</p><pre><code class="language-julia hljs">using SpinClusterMC.JPhiMagestyCarlo
+using LinearAlgebra
+
+h = load_sce_hamiltonian(&quot;jphi.xml&quot;; repeat = (2, 2, 2))
+
+n = h.n_atoms
+
+# Ferromagnetic configuration: all spins along +z
+spins_fm = zeros(3, n)
+spins_fm[3, :] .= 1.0
+E_fm = sce_energy(h, spins_fm)
+println(&quot;FM energy: &quot;, E_fm, &quot; eV&quot;)
+
+# Random spin configuration
+spins_rand = randn(3, n)
+for i in 1:n
+    spins_rand[:, i] ./= norm(spins_rand[:, i])
+end
+E_rand = sce_energy(h, spins_rand)
+println(&quot;Random spin energy: &quot;, E_rand, &quot; eV&quot;)</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../tutorial/">« Tutorial</a><a class="docs-footer-nextpage" href="../api/">API Reference »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Sunday 19 April 2026 07:24">Sunday 19 April 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

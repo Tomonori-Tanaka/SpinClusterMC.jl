@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Tutorial · SpinClusterMC.jl</title><meta name="title" content="Tutorial · SpinClusterMC.jl"/><meta property="og:title" content="Tutorial · SpinClusterMC.jl"/><meta property="twitter:title" content="Tutorial · SpinClusterMC.jl"/><meta name="description" content="Documentation for SpinClusterMC.jl."/><meta property="og:description" content="Documentation for SpinClusterMC.jl."/><meta property="twitter:description" content="Documentation for SpinClusterMC.jl."/><meta property="og:url" content="https://Tomonori-Tanaka.github.io/SpinClusterMC.jl/tutorial/"/><meta property="twitter:url" content="https://Tomonori-Tanaka.github.io/SpinClusterMC.jl/tutorial/"/><link rel="canonical" href="https://Tomonori-Tanaka.github.io/SpinClusterMC.jl/tutorial/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">SpinClusterMC.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li class="is-active"><a class="tocitem" href>Tutorial</a><ul class="internal"><li><a class="tocitem" href="#Prerequisites"><span>Prerequisites</span></a></li><li><a class="tocitem" href="#1.-Metropolis-MC"><span>1. Metropolis MC</span></a></li><li><a class="tocitem" href="#2.-Parallel-Tempering"><span>2. Parallel Tempering</span></a></li><li><a class="tocitem" href="#3.-Setting-an-initial-spin-configuration"><span>3. Setting an initial spin configuration</span></a></li><li><a class="tocitem" href="#4.-Restricting-interaction-body-sizes"><span>4. Restricting interaction body sizes</span></a></li><li><a class="tocitem" href="#5.-Carlo.jl-commands"><span>5. Carlo.jl commands</span></a></li><li><a class="tocitem" href="#6.-Reading-results"><span>6. Reading results</span></a></li></ul></li><li><a class="tocitem" href="../examples/">Examples</a></li><li><a class="tocitem" href="../api/">API Reference</a></li><li><a class="tocitem" href="../technical_notes/">Technical Notes</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Tutorial</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Tutorial</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/Tomonori-Tanaka/SpinClusterMC.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Tutorial"><a class="docs-heading-anchor" href="#Tutorial">Tutorial</a><a id="Tutorial-1"></a><a class="docs-heading-anchor-permalink" href="#Tutorial" title="Permalink"></a></h1><p>This tutorial walks through the typical workflow for running Monte Carlo simulations with SpinClusterMC.jl.</p><h2 id="Prerequisites"><a class="docs-heading-anchor" href="#Prerequisites">Prerequisites</a><a id="Prerequisites-1"></a><a class="docs-heading-anchor-permalink" href="#Prerequisites" title="Permalink"></a></h2><ul><li>A <code>jphi.xml</code> file produced by <a href="https://github.com/Tomonori-Tanaka/Magesty.jl">Magesty.jl</a>. See the <a href="https://Tomonori-Tanaka.github.io/Magesty.jl/tutorial/">Magesty.jl tutorial</a> for how to generate it.</li><li>Julia ≥ 1.12 with SpinClusterMC.jl and Carlo.jl installed.</li></ul><h2 id="1.-Metropolis-MC"><a class="docs-heading-anchor" href="#1.-Metropolis-MC">1. Metropolis MC</a><a id="1.-Metropolis-MC-1"></a><a class="docs-heading-anchor-permalink" href="#1.-Metropolis-MC" title="Permalink"></a></h2><p>The simplest job runs independent Metropolis simulations at a set of temperatures.</p><pre><code class="language-julia hljs">using Carlo
+using Carlo.JobTools
+using SpinClusterMC.JPhiMagestyCarlo
+
+const k_B = 8.617333262e-5  # eV/K
+
+tm = TaskMaker()
+tm.seed           = 1234
+tm.sweeps         = 100_000   # measurement sweeps
+tm.thermalization = 5_000     # equilibration sweeps (excluded from measurements)
+tm.binsize        = 50        # bin length for autocorrelation error estimation
+tm.spin_theta_max = 0.5       # geodesic proposal half-angle (radians)
+tm.supercell      = (2, 2, 2) # tile the primitive XML cell to 8× more atoms
+tm.xml_path       = &quot;path/to/jphi.xml&quot;
+
+for T_K in range(100.0, 1500.0, length = 8)
+    tm.T = k_B * T_K   # temperature in eV
+    task(tm)
+end
+
+job = JobInfo(
+    splitext(@__FILE__)[1],
+    JPhiSpinMC;
+    run_time        = &quot;04:00:00&quot;,
+    checkpoint_time = &quot;01:00:00&quot;,
+    tasks           = make_tasks(tm),
+)
+start(job, ARGS)</code></pre><p>Run it:</p><pre><code class="language-bash hljs">julia job.jl run                        # single process
+mpiexec -n 8 julia job.jl run          # MPI: tasks run in parallel</code></pre><p>Each temperature is a separate Carlo task and can be checkpointed and resumed independently.</p><h2 id="2.-Parallel-Tempering"><a class="docs-heading-anchor" href="#2.-Parallel-Tempering">2. Parallel Tempering</a><a id="2.-Parallel-Tempering-1"></a><a class="docs-heading-anchor-permalink" href="#2.-Parallel-Tempering" title="Permalink"></a></h2><p>Parallel tempering couples replicas at different temperatures with periodic swap attempts, which improves ergodicity and is especially useful near phase transitions.</p><pre><code class="language-julia hljs">using Carlo
+using Carlo.JobTools
+using SpinClusterMC.JPhiMagestyCarlo
+
+const k_B = 8.617333262e-5
+
+tm = TaskMaker()
+tm.seed           = 1234
+tm.sweeps         = 500_000
+tm.thermalization = 5_000
+tm.binsize        = 100
+tm.spin_theta_max = 0.5
+tm.xml_path       = &quot;path/to/jphi.xml&quot;
+tm.supercell      = (2, 2, 2)
+
+Ts_K  = range(100.0, 1500.0; length = 8)
+Ts_mc = collect(k_B .* Ts_K)
+
+tm.parallel_tempering = (
+    mc        = JPhiSpinMC,
+    parameter = :T,
+    values    = Ts_mc,
+    interval  = 20,           # swap attempt every 20 sweeps
+)
+
+task(tm)   # one task = one full PT chain containing all temperatures
+
+job = JobInfo(
+    splitext(@__FILE__)[1],
+    ParallelTemperingMC;
+    run_time        = &quot;04:00:00&quot;,
+    checkpoint_time = &quot;01:00:00&quot;,
+    tasks           = make_tasks(tm),
+    ranks_per_run   = length(Ts_mc),  # one MPI rank per replica
+)
+start(job, ARGS)</code></pre><p>Run with exactly one MPI rank per temperature:</p><pre><code class="language-bash hljs">mpiexec -n 8 julia job.jl run</code></pre><h2 id="3.-Setting-an-initial-spin-configuration"><a class="docs-heading-anchor" href="#3.-Setting-an-initial-spin-configuration">3. Setting an initial spin configuration</a><a id="3.-Setting-an-initial-spin-configuration-1"></a><a class="docs-heading-anchor-permalink" href="#3.-Setting-an-initial-spin-configuration" title="Permalink"></a></h2><p>By default, all spins are drawn uniformly at random on the unit sphere. To start from a specific configuration (e.g., ferromagnetic), pass <code>initial_spins</code>:</p><pre><code class="language-julia hljs">base_n_atoms = 16   # number of atoms in the base cell (without tiling)
+
+# Ferromagnetic: all spins along +z
+s0 = zeros(3, base_n_atoms)
+s0[3, :] .= 1.0
+tm.initial_spins = s0</code></pre><p>The <code>3 × base_n_atoms</code> matrix is tiled periodically over the full supercell. Each column is renormalized to a unit vector automatically.</p><h2 id="4.-Restricting-interaction-body-sizes"><a class="docs-heading-anchor" href="#4.-Restricting-interaction-body-sizes">4. Restricting interaction body sizes</a><a id="4.-Restricting-interaction-body-sizes-1"></a><a class="docs-heading-anchor-permalink" href="#4.-Restricting-interaction-body-sizes" title="Permalink"></a></h2><p>To run with only pair interactions (body size 2), set:</p><pre><code class="language-julia hljs">tm.enabled_bodies = [2]</code></pre><p>This raises an <code>ArgumentError</code> if body size 2 is not present in the XML, or if the selection leaves no active interactions.</p><h2 id="5.-Carlo.jl-commands"><a class="docs-heading-anchor" href="#5.-Carlo.jl-commands">5. Carlo.jl commands</a><a id="5.-Carlo.jl-commands-1"></a><a class="docs-heading-anchor-permalink" href="#5.-Carlo.jl-commands" title="Permalink"></a></h2><p>Every job script accepts a command as its last argument:</p><table><tr><th style="text-align: right">Command</th><th style="text-align: right">Description</th></tr><tr><td style="text-align: right"><code>run</code></td><td style="text-align: right">Start a new run or resume from the latest checkpoint</td></tr><tr><td style="text-align: right"><code>run --restart</code></td><td style="text-align: right">Discard all checkpoints and rerun from scratch</td></tr><tr><td style="text-align: right"><code>status</code></td><td style="text-align: right">Print progress (completed sweeps, ETA) without running</td></tr><tr><td style="text-align: right"><code>merge</code></td><td style="text-align: right">Merge results of an incomplete simulation</td></tr><tr><td style="text-align: right"><code>delete</code></td><td style="text-align: right">Clean up a simulation directory</td></tr></table><pre><code class="language-bash hljs">julia job.jl run
+julia job.jl status
+julia job.jl run --restart</code></pre><h2 id="6.-Reading-results"><a class="docs-heading-anchor" href="#6.-Reading-results">6. Reading results</a><a id="6.-Reading-results-1"></a><a class="docs-heading-anchor-permalink" href="#6.-Reading-results" title="Permalink"></a></h2><p>Carlo writes a JSON results file next to the job script:</p><pre><code class="language-julia hljs">using Carlo.ResultTools, DataFrames
+
+df = DataFrame(ResultTools.dataframe(&quot;job.results.json&quot;))
+T_K = df.T ./ 8.617333262e-5   # convert eV → K
+
+# Available columns (Metropolis):
+# df.Energy, df.SpecificHeat, df.Magnetization, df.Susceptibility, df.BinderRatio, ...</code></pre><p>For parallel tempering, observables are vectors across the temperature chain:</p><pre><code class="language-julia hljs">T_mc = Float64.(df.parallel_tempering[1][&quot;values&quot;])
+T_K  = T_mc ./ 8.617333262e-5
+
+cv     = getfield.(df.SpecificHeat[1], :val)
+cv_err = getfield.(df.SpecificHeat[1], :err)</code></pre><h3 id="Available-observables"><a class="docs-heading-anchor" href="#Available-observables">Available observables</a><a id="Available-observables-1"></a><a class="docs-heading-anchor-permalink" href="#Available-observables" title="Permalink"></a></h3><table><tr><th style="text-align: left">Name</th><th style="text-align: left">Formula</th></tr><tr><td style="text-align: left"><code>Energy</code></td><td style="text-align: left">Total energy per atom (eV)</td></tr><tr><td style="text-align: left"><code>SpecificHeat</code></td><td style="text-align: left"><span>$N(\langle E^2 \rangle - \langle E \rangle^2) / T^2$</span></td></tr><tr><td style="text-align: left"><code>Magnetization</code></td><td style="text-align: left">Vector magnetization magnitude $</td></tr><tr><td style="text-align: left"><code>Susceptibility</code></td><td style="text-align: left"><span>$N \langle m^2 \rangle / T$</span></td></tr><tr><td style="text-align: left"><code>BinderRatio</code></td><td style="text-align: left"><span>$\langle m^2 \rangle^2 / \langle m^4 \rangle$</span></td></tr></table></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../examples/">Examples »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Sunday 19 April 2026 07:24">Sunday 19 April 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
