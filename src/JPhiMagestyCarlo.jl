@@ -518,6 +518,10 @@ Enumerate unique translated cluster instances and precompute metadata.
 """
 function _build_cluster_instances(h::SCEHamiltonian)::Vector{ClusterInstance}
     instances = ClusterInstance[]
+    # Shared coeff_flat per unique cbc object: multiple ClusterInstances that are
+    # geometric translations of the same cbc would otherwise each get a separate
+    # Vector allocation, multiplying memory by the number of translations.
+    coeff_flat_cache = Dict{UInt, Vector{Float64}}()
     n1, n2, n3 = h.repeat
     n_trans = h.n_trans
 
@@ -562,7 +566,9 @@ function _build_cluster_instances(h::SCEHamiltonian)::Vector{ClusterInstance}
                             inst_strides = _compute_instance_strides(cbc.ls)
                             N_cbc = length(cbc.atoms)
                             inst_Mf_size = size(cbc.coeff_tensor, N_cbc + 1)
-                            inst_coeff_flat = vec(collect(Float64, cbc.coeff_tensor))
+                            inst_coeff_flat = get!(coeff_flat_cache, objectid(cbc)) do
+                                vec(collect(Float64, cbc.coeff_tensor))
+                            end
                             push!(
                                 instances,
                                 ClusterInstance(
