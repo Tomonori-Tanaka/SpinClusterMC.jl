@@ -283,4 +283,10 @@ end
 
     include("bcc_2x2x2/test_bcc_2x2x2.jl")
 
+    if isfile(joinpath(@__DIR__, "ferh_4x4x4", "jphi.xml"))
+        include("ferh_4x4x4/test_ferh_4x4x4.jl")
+    else
+        @warn "Skipping ferh_4x4x4 tests: test/ferh_4x4x4/jphi.xml not found"
+    end
+
 end
