@@ -115,29 +115,41 @@ function parse_system_xml(xml_path::AbstractString)::SystemXMLInfo
     system_node = findfirst("//System", doc)
     isnothing(system_node) && throw(ArgumentError("no //System in $xml_path"))
 
-    n_atoms = parse(Int, nodecontent(findfirst("NumberOfAtoms", system_node)))
+    natoms_node = findfirst("NumberOfAtoms", system_node)
+    isnothing(natoms_node) && throw(ArgumentError("no NumberOfAtoms in $xml_path"))
+    n_atoms = parse(Int, nodecontent(natoms_node))
 
     lat_node = findfirst("LatticeVector", system_node)
-    a1 = _parse_vec3(nodecontent(findfirst("a1", lat_node)))
-    a2 = _parse_vec3(nodecontent(findfirst("a2", lat_node)))
-    a3 = _parse_vec3(nodecontent(findfirst("a3", lat_node)))
+    isnothing(lat_node) && throw(ArgumentError("no LatticeVector in $xml_path"))
+    a1_node = findfirst("a1", lat_node); isnothing(a1_node) && throw(ArgumentError("no a1 in $xml_path"))
+    a2_node = findfirst("a2", lat_node); isnothing(a2_node) && throw(ArgumentError("no a2 in $xml_path"))
+    a3_node = findfirst("a3", lat_node); isnothing(a3_node) && throw(ArgumentError("no a3 in $xml_path"))
+    a1 = _parse_vec3(nodecontent(a1_node))
+    a2 = _parse_vec3(nodecontent(a2_node))
+    a3 = _parse_vec3(nodecontent(a3_node))
     lattice = hcat(a1, a2, a3)
 
     per_el = findfirst("Periodicity", system_node)
+    isnothing(per_el) && throw(ArgumentError("no Periodicity in $xml_path"))
     per_ints = parse.(Int, split(nodecontent(per_el)))
     length(per_ints) == 3 || throw(ArgumentError("Periodicity must have 3 integers"))
     per = (per_ints[1], per_ints[2], per_ints[3])
 
     pos_frac = zeros(3, n_atoms)
     pos_block = findfirst("Positions", system_node)
+    isnothing(pos_block) && throw(ArgumentError("no Positions in $xml_path"))
     for p in findall("pos", pos_block)
         ia = parse(Int, p["atom_index"])
         pos_frac[:, ia] .= _parse_vec3(nodecontent(p))
     end
 
     sym_node = findfirst("Symmetry", system_node)
-    n_trans = parse(Int, nodecontent(findfirst("NumberOfTranslations", sym_node)))
+    isnothing(sym_node) && throw(ArgumentError("no Symmetry in $xml_path"))
+    ntrans_node = findfirst("NumberOfTranslations", sym_node)
+    isnothing(ntrans_node) && throw(ArgumentError("no NumberOfTranslations in $xml_path"))
+    n_trans = parse(Int, nodecontent(ntrans_node))
     trans_block = findfirst("Translations", sym_node)
+    isnothing(trans_block) && throw(ArgumentError("no Translations in $xml_path"))
     map_sym = zeros(Int, n_atoms, n_trans)
     for m in findall("map", trans_block)
         t = parse(Int, m["trans"])
@@ -160,7 +172,9 @@ function read_jphi_coefficients(xml_path::AbstractString)::Tuple{Float64, Vector
     doc = readxml(xml_path)
     jnode = findfirst("//JPhi", doc)
     isnothing(jnode) && throw(ArgumentError("no //JPhi in $xml_path"))
-    j0 = parse(Float64, nodecontent(findfirst("ReferenceEnergy", jnode)))
+    ref_node = findfirst("ReferenceEnergy", jnode)
+    isnothing(ref_node) && throw(ArgumentError("no ReferenceEnergy in $xml_path"))
+    j0 = parse(Float64, nodecontent(ref_node))
     pairs = Tuple{Int, Float64}[]
     for el in findall("jphi", jnode)
         push!(pairs, (parse(Int, el["salc_index"]), parse(Float64, nodecontent(el))))
@@ -1376,10 +1390,11 @@ function Carlo.sweep!(mc::JPhiSpinMC, ctx::MCContext)
 
         sold = @view mc.spins[:, i]
         sx_old, sy_old, sz_old = sold[1], sold[2], sold[3]
-        sx_new, sy_new, sz_new = if mc.spin_theta_max === nothing
-            _rand_unit_spin(ctx.rng)
+        theta = mc.spin_theta_max
+        sx_new, sy_new, sz_new = if theta isa Float64
+            _propose_spin_geodesic(ctx.rng, sx_old, sy_old, sz_old, theta)
         else
-            _propose_spin_geodesic(ctx.rng, sx_old, sy_old, sz_old, mc.spin_theta_max)
+            _rand_unit_spin(ctx.rng)
         end
         zlm_row_buf = mc.zlm_row_buf
         ncols = (mc.max_l + 1)^2
@@ -1543,8 +1558,9 @@ function Carlo.write_checkpoint(
     all_energies = MPI.Gather(mc.energy, comm)
 
     if MPI.Comm_rank(comm) == 0
-        out["spins"] = cat(all_spins...; dims = 3)
-        out["energy"] = all_energies
+        out_grp = out::HDF5.Group
+        out_grp["spins"] = cat((all_spins::Vector)...; dims = 3)
+        out_grp["energy"] = all_energies
     end
     return nothing
 end
@@ -1562,8 +1578,9 @@ function Carlo.read_checkpoint!(
     comm::MPI.Comm,
 )
     if MPI.Comm_rank(comm) == 0
-        spins_all = read(in, "spins")
-        energies = vec(read(in, "energy"))
+        in_grp = in::HDF5.Group
+        spins_all = read(in_grp, "spins")
+        energies = vec(read(in_grp, "energy"))
         spins_per_rank = [copy(s) for s in eachslice(spins_all; dims = 3)]
     else
         spins_per_rank = nothing
