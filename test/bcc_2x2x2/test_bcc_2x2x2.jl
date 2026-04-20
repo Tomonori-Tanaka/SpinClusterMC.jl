@@ -285,8 +285,8 @@ end
         spins2[:, ia] = spins1[:, ((ia - 1) % h1.n_atoms) + 1]
     end
 
-    E_int1 = sce_energy(h1, spins1) - h1.j0
-    E_int2 = sce_energy(h2, spins2) - h2.j0
+    E_int1 = sce_energy(h1, spins1) - h1.j0 * prod(h1.repeat)
+    E_int2 = sce_energy(h2, spins2) - h2.j0 * prod(h2.repeat)
 
     @test E_int2 ≈ 8 * E_int1 rtol = 1e-8
 end

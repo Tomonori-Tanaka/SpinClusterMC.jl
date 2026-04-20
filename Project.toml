@@ -17,6 +17,7 @@ Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
 Carlo = "0.3.3"
 EzXML = "1.2.3"
 HDF5 = "0.17.2"
+JET = "0.11"
 LinearAlgebra = "1.12.0"
 Logging = "1.11.0"
 MPI = "0.20.24"
@@ -29,9 +30,10 @@ julia = "1.12"
 Magesty = {url = "https://github.com/Tomonori-Tanaka/Magesty.jl"}
 
 [extras]
+JET = "c3a54625-cd67-489e-a8e7-0a5a0ff4e31b"
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "Logging", "Statistics"]
+test = ["Test", "Logging", "Statistics", "JET"]

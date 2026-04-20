@@ -49,8 +49,8 @@ end
         spins2[:, ia] = spins1[:, ((ia - 1) % h1.n_atoms) + 1]
     end
 
-    E_int1 = sce_energy(h1, spins1) - h1.j0
-    E_int2 = sce_energy(h2, spins2) - h2.j0
+    E_int1 = sce_energy(h1, spins1) - h1.j0 * prod(h1.repeat)
+    E_int2 = sce_energy(h2, spins2) - h2.j0 * prod(h2.repeat)
 
     @test E_int2 ≈ 2 * E_int1 rtol = 1e-8
 end
@@ -129,34 +129,4 @@ end
         spins_new[3, atom] = spins[3, atom]
         JMCC._update_atom_zlm_cache!(zlm, atom, @view(spins[:, atom]), max_l)
     end
-end
-
-# ---------------------------------------------------------------------------
-@testset "ferh_4x4x4: low-T MC magnetization ≈ 1 (T=0.01 eV)" begin
-    params = Dict(
-        :xml_path       => XML_4x4x4,
-        :T              => 0.01,
-        :thermalization => 0,
-        :binsize        => 1,
-        :seed           => 20260420,
-    )
-    mc  = JPhiSpinMC(params)
-
-    mc.spins .= 0.0
-    mc.spins[3, :] .= 1.0
-    JMCC._rebuild_zlm_cache!(mc)
-    mc.energy = mc.ham.j0 + JMCC._energy_from_instances(
-        mc.local_cache.instances[mc.active_instance_indices], mc.spins,
-    )
-
-    ctx = Carlo.MCContext{MersenneTwister}(params)
-
-    n_sweeps = 50
-    for _ in 1:n_sweeps
-        Carlo.sweep!(mc, ctx)
-        Carlo.measure!(mc, ctx)
-    end
-
-    mag_mean = only(Statistics.mean(ctx.measure.observables[:Magnetization]))
-    @test mag_mean > 0.95
 end

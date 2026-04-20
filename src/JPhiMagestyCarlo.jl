@@ -724,7 +724,8 @@ supercell atoms (`a` → column `a`). Only the column count is checked here; eac
 `h.base_n_atoms` as in that routine.
 """
 function sce_energy(h::SCEHamiltonian, spin_directions::AbstractMatrix{<:Real})::Float64
-    E = h.j0
+    # `ReferenceEnergy` from XML is for one base cell; scale it to the tiled supercell.
+    E = h.j0 * prod(h.repeat)
     n1, n2, n3 = h.repeat
     # Recover base-cell fractional positions from supercell positions (tile-(0,0,0) block).
     # h.pos_frac[:,ba] for ba in 1:base_n_atoms = base_frac / (n1,n2,n3).
