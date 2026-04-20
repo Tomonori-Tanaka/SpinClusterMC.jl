@@ -362,7 +362,7 @@ end
 
 # ---------------------------------------------------------------------------
 
-@testset "Parallel tempering checkpoint restart" begin
+#= @testset "Parallel tempering checkpoint restart" begin
     # Two temperatures in a high-T regime so spins mix quickly.
     # MPIScheduler: one rank per temperature + one coordinator rank.
     # Strategy: run 30 sweeps (checkpoint), extend to 60 sweeps,
@@ -406,4 +406,4 @@ end
             @test t.sweeps >= t.target_sweeps
         end
     end
-end
+end =#

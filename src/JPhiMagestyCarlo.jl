@@ -260,6 +260,19 @@ end
 const _HAM_CACHE    = Dict{Tuple{String,NTuple{3,Int}}, SCEHamiltonian}()
 const _ECACHE_CACHE = Dict{Tuple{String,NTuple{3,Int}}, LocalEnergyCache}()
 
+# Caches the derived per-atom instance index structures, which are deterministically
+# computed from (ham, cache, active_body_indices) and can be expensive (~70 MiB) to
+# rebuild during Carlo PT checkpoint gather on the coordinator rank.
+struct DerivedInstanceCache
+    active_body_indices::Vector{Int}
+    active_instance_indices::Vector{Int}
+    related_instances_by_atom::Vector{Vector{Int}}
+    max_l::Int
+    max_sites::Int
+end
+
+const _DERIVED_CACHE = Dict{Tuple{String,NTuple{3,Int},Tuple}, DerivedInstanceCache}()
+
 """
 Return `(4π)^(n_sites/2)` normalization used for cluster contributions.
 """
@@ -379,6 +392,46 @@ function _mpi_build_ham_and_cache(
     _HAM_CACHE[key]    = ham
     _ECACHE_CACHE[key] = cache
     return ham, cache
+end
+
+"""
+Return the `DerivedInstanceCache` for `(xml_path, rep, active_body_indices)`, building
+and storing it on the first call and returning the cached result on subsequent calls.
+
+This avoids rebuilding `_build_related_instances_by_atom` (O(n_instances × n_atoms),
+~70 MiB for ferh_4x4x4) every time `Serialization.deserialize` reconstructs a
+`JPhiSpinMC` during Carlo's parallel-tempering checkpoint gather.
+"""
+function _get_or_build_derived(
+    xml_path::String,
+    rep::NTuple{3,Int},
+    active_body_indices::Vector{Int},
+    cache::LocalEnergyCache,
+    n_atoms::Int,
+)::DerivedInstanceCache
+    key = (xml_path, rep, Tuple(active_body_indices))
+    haskey(_DERIVED_CACHE, key) && return _DERIVED_CACHE[key]
+    derived = DerivedInstanceCache(
+        active_body_indices,
+        _active_instance_indices(cache, active_body_indices),
+        _build_related_instances_by_atom(cache, active_body_indices, n_atoms),
+        _max_l_in_instances(cache.instances),
+        _max_sites_in_instances(cache.instances),
+    )
+    _DERIVED_CACHE[key] = derived
+    return derived
+end
+
+# Reconstruct active_body_indices from the stored enabled_bodies reconstruction key.
+# O(n_body_sizes); used in Serialization.deserialize where enabled_bodies is stored
+# but active_body_indices is not (to keep the serialized payload small).
+function _enabled_bodies_to_active_indices(
+    enabled_bodies,
+    body_list::Vector{Int},
+)::Vector{Int}
+    enabled_bodies === nothing && return collect(eachindex(body_list))
+    req_set = Set(Int.(enabled_bodies))
+    return [i for (i, b) in enumerate(body_list) if b in req_set]
 end
 
 """
@@ -830,14 +883,11 @@ function JPhiSpinMC(params::AbstractDict)
     ham, cache = _mpi_build_ham_and_cache(xml, rep)
     T = Float64(params[:T])
     active_body_indices = _parse_enabled_body_indices(params, cache.body_list)
-    active_instance_indices = _active_instance_indices(cache, active_body_indices)
-    related_instances_by_atom = _build_related_instances_by_atom(cache, active_body_indices, ham.n_atoms)
-    max_l = _max_l_in_instances(cache.instances)
-    zlm_cache = _alloc_zlm_cache(ham.n_atoms, max_l)
-    zlm_row_buf = Vector{Float64}(undef, (max_l + 1)^2)
-    max_sites = _max_sites_in_instances(cache.instances)
-    other_sites_work = Vector{Int}(undef, max_sites)
-    cart_idx_work = Vector{Int}(undef, max_sites)
+    derived = _get_or_build_derived(xml, rep, active_body_indices, cache, ham.n_atoms)
+    zlm_cache = _alloc_zlm_cache(ham.n_atoms, derived.max_l)
+    zlm_row_buf = Vector{Float64}(undef, (derived.max_l + 1)^2)
+    other_sites_work = Vector{Int}(undef, derived.max_sites)
+    cart_idx_work = Vector{Int}(undef, derived.max_sites)
     spin_theta_max = if haskey(params, :spin_theta_max)
         θ = Float64(params[:spin_theta_max])
         θ > 0.0 || throw(ArgumentError("spin_theta_max must be positive, got $θ"))
@@ -863,10 +913,10 @@ function JPhiSpinMC(params::AbstractDict)
         zeros(3, ham.n_atoms),
         0.0,
         cache,
-        active_body_indices,
-        active_instance_indices,
-        related_instances_by_atom,
-        max_l,
+        derived.active_body_indices,
+        derived.active_instance_indices,
+        derived.related_instances_by_atom,
+        derived.max_l,
         zlm_cache,
         zlm_row_buf,
         other_sites_work,
@@ -1460,24 +1510,16 @@ function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{J
     # the cache ensures ham/local_cache are NOT rebuilt 32 times.
     ham, cache = _mpi_build_ham_and_cache(xml_path, repeat)
 
-    active_body_indices = if enabled_bodies === nothing
-        collect(eachindex(cache.body_list))
-    else
-        req = Int.(collect(enabled_bodies))
-        [i for (i, b) in enumerate(cache.body_list) if b in req]
-    end
-    active_instance_indices   = _active_instance_indices(cache, active_body_indices)
-    related_instances_by_atom = _build_related_instances_by_atom(cache, active_body_indices, ham.n_atoms)
-    max_l     = _max_l_in_instances(cache.instances)
-    max_sites = _max_sites_in_instances(cache.instances)
-    zlm_cache = _alloc_zlm_cache(ham.n_atoms, max_l)
-    zlm_row_buf = Vector{Float64}(undef, (max_l + 1)^2)
+    active_body_indices = _enabled_bodies_to_active_indices(enabled_bodies, cache.body_list)
+    derived = _get_or_build_derived(xml_path, repeat, active_body_indices, cache, ham.n_atoms)
+    zlm_cache = _alloc_zlm_cache(ham.n_atoms, derived.max_l)
+    zlm_row_buf = Vector{Float64}(undef, (derived.max_l + 1)^2)
 
     mc = JPhiSpinMC(
         T, ham, spins, energy, cache,
-        active_body_indices, active_instance_indices, related_instances_by_atom,
-        max_l, zlm_cache, zlm_row_buf,
-        Vector{Int}(undef, max_sites), Vector{Int}(undef, max_sites),
+        derived.active_body_indices, derived.active_instance_indices, derived.related_instances_by_atom,
+        derived.max_l, zlm_cache, zlm_row_buf,
+        Vector{Int}(undef, derived.max_sites), Vector{Int}(undef, derived.max_sites),
         spin_theta_max, renorm_every, sweep_count,
         xml_path, repeat, enabled_bodies,
     )
