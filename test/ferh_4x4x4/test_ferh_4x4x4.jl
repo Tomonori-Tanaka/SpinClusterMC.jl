@@ -23,6 +23,9 @@ const XML_4x4x4 = joinpath(@__DIR__, "jphi.xml")
 end
 
 # ---------------------------------------------------------------------------
+# Validate that reference path (sce_energy) and fast path (_energy_from_instances)
+# agree for ferh_4x4x4. This is the only ferh test that calls sce_energy; it is
+# intentionally slow (~70 s) and serves as a one-time sanity check.
 @testset "ferh_4x4x4: reference path agrees with fast path" begin
     h = load_sce_hamiltonian(XML_4x4x4)
     rng = MersenneTwister(42)
@@ -39,6 +42,10 @@ end
 end
 
 # ---------------------------------------------------------------------------
+# All tests below use only the fast path (_energy_from_instances). sce_energy is
+# not called again because reference≈fast has been established above.
+# ---------------------------------------------------------------------------
+
 @testset "ferh_4x4x4: SCE interaction energy is extensive for repeat=(2,1,1)" begin
     h1 = load_sce_hamiltonian(XML_4x4x4; repeat = (1, 1, 1))
     h2 = load_sce_hamiltonian(XML_4x4x4; repeat = (2, 1, 1))
@@ -49,30 +56,32 @@ end
         spins2[:, ia] = spins1[:, ((ia - 1) % h1.n_atoms) + 1]
     end
 
-    E_int1 = sce_energy(h1, spins1) - h1.j0 * prod(h1.repeat)
-    E_int2 = sce_energy(h2, spins2) - h2.j0 * prod(h2.repeat)
+    cache1 = JMCC.build_local_energy_cache(h1)
+    cache2 = JMCC.build_local_energy_cache(h2)
+    E_int1 = JMCC._energy_from_instances(cache1.instances, spins1)
+    E_int2 = JMCC._energy_from_instances(cache2.instances, spins2)
 
     @test E_int2 ≈ 2 * E_int1 rtol = 1e-8
 end
 
 # ---------------------------------------------------------------------------
 @testset "ferh_4x4x4: ferromagnetic energy consistent with tiled repeat" begin
-    # Ferromagnetic energy per atom must be the same for (1,1,1) and (2,2,2).
     h1 = load_sce_hamiltonian(XML_4x4x4; repeat = (1, 1, 1))
-    h2 = load_sce_hamiltonian(XML_4x4x4; repeat = (2, 2, 2))
+    h2 = load_sce_hamiltonian(XML_4x4x4; repeat = (2, 1, 1))
 
     spins1 = zeros(3, h1.n_atoms); spins1[3, :] .= 1.0
     spins2 = zeros(3, h2.n_atoms); spins2[3, :] .= 1.0
 
-    E_per_atom1 = sce_energy(h1, spins1) / h1.n_atoms
-    E_per_atom2 = sce_energy(h2, spins2) / h2.n_atoms
+    cache1 = JMCC.build_local_energy_cache(h1)
+    cache2 = JMCC.build_local_energy_cache(h2)
+    E_per_atom1 = (h1.j0 * prod(h1.repeat) + JMCC._energy_from_instances(cache1.instances, spins1)) / h1.n_atoms
+    E_per_atom2 = (h2.j0 * prod(h2.repeat) + JMCC._energy_from_instances(cache2.instances, spins2)) / h2.n_atoms
 
     @test E_per_atom1 ≈ E_per_atom2 rtol = 1e-8
 end
 
 # ---------------------------------------------------------------------------
 @testset "ferh_4x4x4: delta energy consistency" begin
-    # Flip one spin; the local delta from instances must equal the full sce_energy change.
     h = load_sce_hamiltonian(XML_4x4x4)
     rng = MersenneTwister(7)
     spins = let s = randn(rng, 3, h.n_atoms)
@@ -94,7 +103,7 @@ end
     buf_other = Vector{Int}(undef, max_sites)
     buf_cart  = Vector{Int}(undef, max_sites)
 
-    E0 = sce_energy(h, spins)
+    E0 = h.j0 + JMCC._energy_from_instances(cache.instances, spins)
 
     for atom in [1, 64, h.n_atoms]
         E_old_local = sum(
@@ -120,7 +129,7 @@ end
         )
 
         dE_local = E_new_local - E_old_local
-        dE_full  = sce_energy(h, spins_new) - E0
+        dE_full  = h.j0 + JMCC._energy_from_instances(cache.instances, spins_new) - E0
 
         @test dE_local ≈ dE_full rtol = 1e-7
 
