@@ -727,6 +727,22 @@ function _energy_from_instances(
 end
 
 """
+Accumulate total interaction energy from prebuilt cluster instances using a precomputed Zlm cache.
+Avoids redundant Ylm evaluations: each atom's spherical harmonics are read once from `zlm_cache`
+instead of being recomputed for every instance. Use `_build_zlm_cache` to construct the cache.
+"""
+function _energy_from_instances_cached(
+    instances::Vector{ClusterInstance},
+    zlm_cache::Matrix{Float64},
+)::Float64
+    E = 0.0
+    @inbounds for inst in instances
+        E += inst.prefactor * _tensor_contract_instance_cached(inst, zlm_cache)
+    end
+    return E
+end
+
+"""
     sce_energy(h, spin_directions) -> Float64
 
 Total SCE Hamiltonian energy: constant offset `h.j0` plus, for each SALC index `s`, the weighted sum of
@@ -1011,6 +1027,24 @@ function _rebuild_zlm_cache!(mc::JPhiSpinMC)
         _update_atom_zlm_cache!(mc.zlm_cache, atom, @view(mc.spins[:, atom]), mc.max_l)
     end
     return nothing
+end
+
+"""
+Build a per-atom `Z_lm` cache from a spin matrix without requiring a `JPhiSpinMC` instance.
+Rows index atoms; columns index `(l, m)` via `_zlm_col`. Useful for standalone full-energy
+evaluation, e.g. in global update algorithms or benchmarks.
+"""
+function _build_zlm_cache(
+    spin_directions::AbstractMatrix{<:Real},
+    max_l::Int,
+)::Matrix{Float64}
+    n_atoms = size(spin_directions, 2)
+    ncols = (max_l + 1)^2
+    zlm_cache = Matrix{Float64}(undef, n_atoms, ncols)
+    @inbounds for atom in 1:n_atoms
+        _update_atom_zlm_cache!(zlm_cache, atom, @view(spin_directions[:, atom]), max_l)
+    end
+    return zlm_cache
 end
 
 """
@@ -1363,9 +1397,9 @@ function Carlo.init!(mc::JPhiSpinMC, ctx::MCContext, params::AbstractDict)
         end
     end
     _rebuild_zlm_cache!(mc)
-    mc.energy = mc.ham.j0 + _energy_from_instances(
+    mc.energy = mc.ham.j0 + _energy_from_instances_cached(
         mc.local_cache.instances[mc.active_instance_indices],
-        mc.spins,
+        mc.zlm_cache,
     )
     return nothing
 end

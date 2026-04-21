@@ -1,9 +1,7 @@
 #!/usr/bin/env julia
 #
-# Benchmark sce_energy (reference / coupled_cluster_energy path) for ferh_4x4x4.
-#
-# Measures wall time for N evaluations of sce_energy and _energy_from_instances
-# across multiple supercell sizes to quantify the O(n_salc × n_trans) cost scaling.
+# Benchmark sce_energy (reference path) vs _energy_from_instances (uncached) vs
+# _energy_from_instances_cached (zlm-cache path) for ferh_4x4x4.
 #
 # Usage:
 #   julia scripts/dev/benchmark_sce_reference.jl
@@ -59,43 +57,61 @@ end
 function bench_repeat(xml, rep, n_eval, seed)
     h = load_sce_hamiltonian(xml; repeat = rep)
     cache = JMCC.build_local_energy_cache(h)
+    derived = JMCC._get_or_build_derived(
+        xml, rep, collect(eachindex(cache.body_list)), cache, h.n_atoms,
+    )
     rng = MersenneTwister(seed)
     spins = rand_unit_spins(rng, h.n_atoms)
+    active_instances = cache.instances[derived.active_instance_indices]
 
-    # warm up (compile + instruction cache)
+    # build zlm cache once (reused across calls in the cached path)
+    zlm_cache = JMCC._build_zlm_cache(spins, derived.max_l)
+
+    # warm-up (compile + instruction cache)
     sce_energy(h, spins)
-    JMCC._energy_from_instances(cache.instances, spins)
+    JMCC._energy_from_instances(active_instances, spins)
+    JMCC._energy_from_instances_cached(active_instances, zlm_cache)
 
+    # --- reference path ---
     checksum_ref = 0.0
     t_ref = @elapsed for _ in 1:n_eval
         checksum_ref += sce_energy(h, spins)
     end
 
-    checksum_fast = 0.0
-    t_fast = @elapsed for _ in 1:n_eval
-        checksum_fast += JMCC._energy_from_instances(cache.instances, spins)
+    # --- uncached fast path (Ylm recomputed per instance) ---
+    checksum_unc = 0.0
+    t_unc = @elapsed for _ in 1:n_eval
+        checksum_unc += JMCC._energy_from_instances(active_instances, spins)
+    end
+
+    # --- cached fast path (Ylm precomputed once per call, table-lookup per instance) ---
+    checksum_cac = 0.0
+    t_cac = @elapsed for _ in 1:n_eval
+        # rebuild zlm_cache from spins (same cost as _rebuild_zlm_cache! in init!)
+        zlm = JMCC._build_zlm_cache(spins, derived.max_l)
+        checksum_cac += JMCC._energy_from_instances_cached(active_instances, zlm)
     end
 
     return (;
         rep,
-        n_atoms      = h.n_atoms,
-        n_instances  = length(cache.instances),
-        n_salc       = length(h.salc_list),
-        t_ref_total  = t_ref,
-        t_ref_per    = t_ref / n_eval,
-        t_fast_total = t_fast,
-        t_fast_per   = t_fast / n_eval,
-        speedup      = t_ref / t_fast,
-        checksum_ref, checksum_fast,
+        n_atoms         = h.n_atoms,
+        n_instances     = length(active_instances),
+        n_salc          = length(h.salc_list),
+        t_ref_per       = t_ref / n_eval,
+        t_unc_per       = t_unc / n_eval,
+        t_cac_per       = t_cac / n_eval,
+        speedup_unc     = t_ref / t_unc,
+        speedup_cac     = t_ref / t_cac,
+        checksum_ref, checksum_unc, checksum_cac,
     )
 end
 
 function main()
-    opts  = parse_args(ARGS)
-    xml   = abspath(opts["xml"])
+    opts   = parse_args(ARGS)
+    xml    = abspath(opts["xml"])
     n_eval = parse(Int, opts["evals"])
-    seed  = parse(Int, opts["seed"])
-    reps  = [parse_repeat(s) for s in split(opts["repeats"], ",")]
+    seed   = parse(Int, opts["seed"])
+    reps   = [parse_repeat(s) for s in split(opts["repeats"], ",")]
 
     isfile(xml) || error("XML not found: $xml")
 
@@ -115,22 +131,31 @@ function main()
     end
 
     println()
-    println("repeat  n_atoms  n_salc    n_instances  sce_energy/call  fast/call   speedup  total($n_eval evals)")
-    println("------  -------  ------    -----------  ---------------  ---------   -------  --------")
+    @printf("%-7s %-8s %-12s %-18s %-18s %-18s %-12s %-10s\n",
+        "repeat", "n_atoms", "n_instances",
+        "sce_energy/call", "uncached/call", "cached/call",
+        "x vs sce", "x vs sce (cached)")
+    println("-"^105)
     for r in results
-        rep_str   = join(r.rep, "x")
-        @printf("%-7s %-8d %-9d %-12d %-16s %-11s %-8.1f %s\n",
-            rep_str, r.n_atoms, r.n_salc, r.n_instances,
-            fmt_time(r.t_ref_per), fmt_time(r.t_fast_per), r.speedup,
-            fmt_time(r.t_ref_total),
+        rep_str = join(r.rep, "x")
+        @printf("%-7s %-8d %-12d %-18s %-18s %-18s %-12.1f %-10.1f\n",
+            rep_str, r.n_atoms, r.n_instances,
+            fmt_time(r.t_ref_per), fmt_time(r.t_unc_per), fmt_time(r.t_cac_per),
+            r.speedup_unc, r.speedup_cac,
         )
+        # checksum agreement
+        δ_unc = abs(r.checksum_ref - r.checksum_unc) / (abs(r.checksum_ref) + 1e-300)
+        δ_cac = abs(r.checksum_ref - r.checksum_cac) / (abs(r.checksum_ref) + 1e-300)
+        @printf("        checksum vs sce: uncached rel-err=%.2e  cached rel-err=%.2e\n",
+            δ_unc, δ_cac)
     end
 
     println()
     println("Notes:")
-    println("  sce_energy      = coupled_cluster_energy reference path, O(n_salc × n_trans × cluster_size)")
-    println("  fast path       = _energy_from_instances (cached Zlm tensor contraction)")
-    println("  total($n_eval evals) = wall time to call sce_energy $n_eval times (no parallelism)")
+    println("  sce_energy  = coupled_cluster_energy reference path, O(n_salc × n_trans × cluster_size)")
+    println("  uncached    = _energy_from_instances: recomputes Ylm for every instance (no cache)")
+    println("  cached      = _energy_from_instances_cached: Ylm computed once per atom via _build_zlm_cache,")
+    println("                then read from table per instance — same cost as Carlo.init!")
 end
 
 main()
