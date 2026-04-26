@@ -258,6 +258,61 @@ end
             end
         end
 
+        @testset "monomial kernel matches SALC kernel" begin
+            # The expanded scalar-monomial form must reproduce sce_energy on
+            # arbitrary spin configurations to floating-point precision.
+            for rep in ((1,1,1), (2,1,1), (2,2,2))
+                rng = MersenneTwister(11 + sum(rep))
+                h = load_sce_hamiltonian(XML; repeat = rep)
+                spins = rand_unit_spins(rng, h.n_atoms)
+                E_ref  = sce_energy(h, spins)
+                E_mono = monomial_sce_energy(h, spins)
+                @test isapprox(E_ref, E_mono; atol = 1e-10, rtol = 1e-10)
+
+                # Body-filter equivalence: monomial table built with the full
+                # body set must match the full sce_energy.
+                tbl, _ = build_monomial_table(
+                    h; active_bodies = sort!(unique(length(cbc.atoms)
+                                                    for grp in h.salc_list for cbc in grp)),
+                )
+                E_mono_filt = monomial_sce_energy(h, spins; table = tbl)
+                @test isapprox(E_ref, E_mono_filt; atol = 1e-10, rtol = 1e-10)
+            end
+        end
+
+        @testset "monomial delta-energy matches full energy delta" begin
+            # Flip a spin; the per-atom monomial sum delta must equal the change
+            # in the full sce_energy. Mirrors the analogous tensor-kernel test
+            # above but exercises the monomial code path used in MC sweeps.
+            rng = MersenneTwister(22)
+            h = load_sce_hamiltonian(XML)
+            spins = rand_unit_spins(rng, h.n_atoms)
+            tbl, by_atom = build_monomial_table(h)
+
+            max_l = JMCC._max_l_in_table(tbl)
+            zlm = JMCC._build_zlm_cache(spins, max_l)
+
+            E0 = sce_energy(h, spins)
+
+            for atom in [1, 2, h.n_atoms]
+                E_old = JMCC._monomial_local_energy(tbl, zlm, by_atom[atom])
+
+                spins_new = copy(spins)
+                sx, sy, sz = JMCC._rand_unit_spin(rng)
+                spins_new[1, atom] = sx; spins_new[2, atom] = sy; spins_new[3, atom] = sz
+                JMCC._update_atom_zlm_cache!(zlm, atom, @view(spins_new[:, atom]), max_l)
+
+                E_new = JMCC._monomial_local_energy(tbl, zlm, by_atom[atom])
+
+                dE_local = E_new - E_old
+                dE_full = sce_energy(h, spins_new) - E0
+                @test isapprox(dE_local, dE_full; atol = 1e-9, rtol = 1e-7)
+
+                # restore
+                JMCC._update_atom_zlm_cache!(zlm, atom, @view(spins[:, atom]), max_l)
+            end
+        end
+
         @testset "supercell interaction energy scales linearly" begin
             # Ferromagnetic config (all spins identical).
             # j0 is defined per base cell and scales with supercell volume.
