@@ -42,9 +42,9 @@
 ## 設計判断
 
 ### j0（定数エネルギー項）
-`sce_energy`、`monomial_sce_energy`、`mc.energy` はいずれも `j0` を含まない。
+`jphi.xml` の `ReferenceEnergy`（`j0`）は読み込まない。
 理由：本パッケージはMCサンプリング専用であり、`ΔE` のみが重要なため定数項は不要。
-絶対エネルギーが必要な場合は呼び出し側で `h.j0 * prod(h.repeat)` を加算すること。
+絶対エネルギーが必要な呼び出し側は XML から直接 `ReferenceEnergy` を読むこと。
 
 ## 連動箇所（一方を変えたら全箇所を確認）
 

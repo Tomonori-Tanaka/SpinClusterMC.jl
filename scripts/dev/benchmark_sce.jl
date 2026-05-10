@@ -120,13 +120,13 @@ function main()
 
     # Warm-up to reduce first-call compilation effects in timing.
     _ = sce_energy(h, spins)
-    _ = h.j0 + JMCC._energy_from_instances(cache.instances, spins)
+    _ = JMCC._energy_from_instances(cache.instances, spins)
 
     t_ref, sum_ref = avg_eval_time_s(() -> sce_energy(h, spins), n_eval)
-    t_fast, sum_fast = avg_eval_time_s(() -> h.j0 + JMCC._energy_from_instances(cache.instances, spins), n_eval)
+    t_fast, sum_fast = avg_eval_time_s(() -> JMCC._energy_from_instances(cache.instances, spins), n_eval)
 
     e_ref = sce_energy(h, spins)
-    e_fast = h.j0 + JMCC._energy_from_instances(cache.instances, spins)
+    e_fast = JMCC._energy_from_instances(cache.instances, spins)
     diff = abs(e_ref - e_fast)
 
     println()

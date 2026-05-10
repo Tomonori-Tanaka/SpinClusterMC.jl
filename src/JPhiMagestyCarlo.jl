@@ -43,7 +43,9 @@ include("xml_io.jl")
 	SCEHamiltonian
 
 Reconstructed from `jphi.xml`: SALC list, **base cell** translation map `map_sym` of size
-`base_n_atoms × n_trans`, and `j0` / `jphi` coefficients.
+`base_n_atoms × n_trans`, and `jphi` coefficients. The XML's `ReferenceEnergy` (`j0`)
+constant is intentionally not stored: this package is for MC sampling where only ΔE
+matters, so the constant offset is irrelevant.
 
 If `repeat != (1,1,1)`, the XML cell is tiled `(n₁,n₂,n₃)` times in fractional stacking; then
 `n_atoms = base_n_atoms * n₁ * n₂ * n₃`. Each cluster term is replicated on every tile, and inside
@@ -59,7 +61,6 @@ struct SCEHamiltonian
     lattice::Matrix{Float64}
     pos_frac::Matrix{Float64}
     salc_list::Vector{Vector{CoupledBasis_with_coefficient}}
-    j0::Float64
     jphi::Vector{Float64}
     map_sym::Matrix{Int}
     n_trans::Int
@@ -199,7 +200,7 @@ function load_sce_hamiltonian(
     all(r -> r ≥ 1, repeat) || throw(ArgumentError("repeat must be positive integers, got $repeat"))
     basis = read_basisset_from_xml(xml_path)
     sys = parse_system_xml(xml_path)
-    j0, jphi = read_jphi_coefficients(xml_path)
+    jphi = read_jphi_coefficients(xml_path)
     length(jphi) == length(basis.salc_list) ||
         throw(ArgumentError("number of jphi values ($(length(jphi))) != num_salc ($(length(basis.salc_list)))"))
     sys.n_atoms ≥ maximum(
@@ -217,7 +218,6 @@ function load_sce_hamiltonian(
         lat_s,
         pos_s,
         basis.salc_list,
-        j0,
         jphi,
         sys.map_sym,
         sys.n_trans,

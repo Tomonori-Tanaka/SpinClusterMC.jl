@@ -133,13 +133,10 @@ function parse_system_xml(xml_path::AbstractString)::SystemXMLInfo
     return SystemXMLInfo(n_atoms, lattice, per, pos_frac, n_trans, map_sym)
 end
 
-function read_jphi_coefficients(xml_path::AbstractString)::Tuple{Float64, Vector{Float64}}
+function read_jphi_coefficients(xml_path::AbstractString)::Vector{Float64}
     doc = readxml(xml_path)
     jnode = findfirst("//JPhi", doc)
     isnothing(jnode) && throw(ArgumentError("no //JPhi in $xml_path"))
-    ref_node = findfirst("ReferenceEnergy", jnode)
-    isnothing(ref_node) && throw(ArgumentError("no ReferenceEnergy in $xml_path"))
-    j0 = parse(Float64, nodecontent(ref_node))
     pairs = Tuple{Int, Float64}[]
     for el in findall("jphi", jnode)
         push!(pairs, (parse(Int, el["salc_index"]), parse(Float64, nodecontent(el))))
@@ -148,5 +145,5 @@ function read_jphi_coefficients(xml_path::AbstractString)::Tuple{Float64, Vector
     for (i, (si, _)) in enumerate(pairs)
         si == i || throw(ArgumentError("jphi salc_index must be 1..n without gaps; got index $si at position $i"))
     end
-    return j0, last.(pairs)
+    return last.(pairs)
 end
