@@ -736,7 +736,7 @@ Derived quantities registered via `Carlo.register_evaluables`:
 mutable struct JPhiSpinMC <: AbstractMC
     T::Float64
     ham::SCEHamiltonian
-    spins::Matrix{Float64}
+    spins::Vector{SVector{3,Float64}}
     energy::Float64
     local_cache::LocalEnergyCache
     active_body_indices::Vector{Int}
@@ -861,7 +861,7 @@ function JPhiSpinMC(params::AbstractDict)
         local_template = build_local_energy_template(ham)
         atoms_buf = Vector{Int}(undef, max(max_sites, 1))
         return JPhiSpinMC(
-            T, ham, zeros(3, n), 0.0,
+            T, ham, [zero(SVector{3,Float64}) for _ in 1:n], 0.0,
             stub_cache,
             active_body_indices, Int[], [Int[] for _ in 1:n],
             max_l, zlm_cache, zlm_row_buf,
@@ -883,7 +883,7 @@ function JPhiSpinMC(params::AbstractDict)
     return JPhiSpinMC(
         T,
         ham,
-        zeros(3, ham.n_atoms),
+        [zero(SVector{3,Float64}) for _ in 1:ham.n_atoms],
         0.0,
         cache,
         derived.active_body_indices,
@@ -1012,7 +1012,7 @@ Rebuild the full per-atom `Z_lm` cache from current MC spins.
 """
 function _rebuild_zlm_cache!(mc::JPhiSpinMC)
     @inbounds for atom in 1:mc.ham.n_atoms
-        _update_atom_zlm_cache!(mc.zlm_cache, atom, @view(mc.spins[:, atom]), mc.max_l)
+        _update_atom_zlm_cache!(mc.zlm_cache, atom, mc.spins[atom], mc.max_l)
     end
     return nothing
 end
@@ -1284,9 +1284,7 @@ function Carlo.init!(mc::JPhiSpinMC, ctx::MCContext, params::AbstractDict)
     else
         for i in 1:n
             sx, sy, sz = _rand_unit_spin(ctx.rng)
-            mc.spins[1, i] = sx
-            mc.spins[2, i] = sy
-            mc.spins[3, i] = sz
+            mc.spins[i] = SVector(sx, sy, sz)
         end
     end
     _rebuild_zlm_cache!(mc)
@@ -1329,21 +1327,21 @@ function Carlo.sweep!(mc::JPhiSpinMC, ctx::MCContext)
             e
         end
 
-        sold = @view mc.spins[:, i]
-        sx_old, sy_old, sz_old = sold[1], sold[2], sold[3]
+        s_old = mc.spins[i]
         theta = mc.spin_theta_max
         sx_new, sy_new, sz_new = if theta isa Float64
-            _propose_spin_geodesic(ctx.rng, sx_old, sy_old, sz_old, theta)
+            _propose_spin_geodesic(ctx.rng, s_old[1], s_old[2], s_old[3], theta)
         else
             _rand_unit_spin(ctx.rng)
         end
+        s_new = SVector(sx_new, sy_new, sz_new)
         zlm_row_buf = mc.zlm_row_buf
         ncols = (mc.max_l + 1)^2
         @inbounds for j in 1:ncols
             zlm_row_buf[j] = mc.zlm_cache[i, j]
         end
-        sold[1], sold[2], sold[3] = sx_new, sy_new, sz_new
-        _update_atom_zlm_cache!(mc.zlm_cache, i, sold, mc.max_l)
+        mc.spins[i] = s_new
+        _update_atom_zlm_cache!(mc.zlm_cache, i, s_new, mc.max_l)
 
         E_new_local = if use_template
             _template_local_energy!(mc, i)
@@ -1366,7 +1364,7 @@ function Carlo.sweep!(mc::JPhiSpinMC, ctx::MCContext)
         if dE <= 0.0 || rand(ctx.rng) < exp(-dE / mc.T)
             mc.energy += dE
         else
-            sold[1], sold[2], sold[3] = sx_old, sy_old, sz_old
+            mc.spins[i] = s_old
             @inbounds for j in 1:ncols
                 mc.zlm_cache[i, j] = zlm_row_buf[j]
             end
@@ -1375,11 +1373,8 @@ function Carlo.sweep!(mc::JPhiSpinMC, ctx::MCContext)
     mc.sweep_count += 1
     if mc.renorm_every > 0 && mc.sweep_count % mc.renorm_every == 0
         @inbounds for i in 1:n
-            s = @view mc.spins[:, i]
-            inv_nrm = 1.0 / hypot(s[1], s[2], s[3])
-            s[1] *= inv_nrm
-            s[2] *= inv_nrm
-            s[3] *= inv_nrm
+            s = mc.spins[i]
+            mc.spins[i] = s / hypot(s[1], s[2], s[3])
         end
         _rebuild_zlm_cache!(mc)
     end
@@ -1388,9 +1383,8 @@ end
 
 function Carlo.measure!(mc::JPhiSpinMC, ctx::MCContext)
     n = mc.ham.n_atoms
-    mx = sum(@view mc.spins[1, :]) / n
-    my = sum(@view mc.spins[2, :]) / n
-    mz = sum(@view mc.spins[3, :]) / n
+    m = sum(mc.spins) / n
+    mx, my, mz = m[1], m[2], m[3]
     mag2 = mx^2 + my^2 + mz^2
     mag = sqrt(mag2)
     measure!(ctx, :Energy, mc.energy / n)
@@ -1446,7 +1440,7 @@ end
 function Serialization.serialize(s::Serialization.AbstractSerializer, mc::JPhiSpinMC)
     Serialization.serialize_type(s, JPhiSpinMC, false)
     Serialization.serialize(s, mc.T)
-    Serialization.serialize(s, mc.spins)
+    Serialization.serialize(s, _spins_to_matrix(mc.spins))
     Serialization.serialize(s, mc.energy)
     Serialization.serialize(s, mc.xml_path)
     Serialization.serialize(s, mc.repeat)
@@ -1459,7 +1453,8 @@ end
 
 function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{JPhiSpinMC})
     T            = Serialization.deserialize(s)::Float64
-    spins        = Serialization.deserialize(s)::Matrix{Float64}
+    spins_mat    = Serialization.deserialize(s)::Matrix{Float64}
+    spins        = _matrix_to_spins(spins_mat)
     energy       = Serialization.deserialize(s)::Float64
     xml_path     = Serialization.deserialize(s)::String
     repeat       = Serialization.deserialize(s)::NTuple{3,Int}
@@ -1499,7 +1494,7 @@ function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{J
 end
 
 function Carlo.write_checkpoint(mc::JPhiSpinMC, out::HDF5.Group)
-    out["spins"] = mc.spins
+    out["spins"] = _spins_to_matrix(mc.spins)
     out["energy"] = mc.energy
     return nothing
 end
@@ -1509,7 +1504,7 @@ function Carlo.write_checkpoint(
     out::Union{HDF5.Group,Nothing},
     comm::MPI.Comm,
 )
-    all_spins = MPI.gather(mc.spins, comm)
+    all_spins = MPI.gather(_spins_to_matrix(mc.spins), comm)
     all_energies = MPI.Gather(mc.energy, comm)
 
     if MPI.Comm_rank(comm) == 0
@@ -1521,7 +1516,10 @@ function Carlo.write_checkpoint(
 end
 
 function Carlo.read_checkpoint!(mc::JPhiSpinMC, in::HDF5.Group)
-    mc.spins .= read(in, "spins")
+    spins_mat = read(in, "spins")::Matrix{Float64}
+    @inbounds for i in eachindex(mc.spins)
+        mc.spins[i] = SVector{3,Float64}(spins_mat[1, i], spins_mat[2, i], spins_mat[3, i])
+    end
     mc.energy = read(in, "energy")
     _rebuild_zlm_cache!(mc)
     return nothing
@@ -1542,7 +1540,10 @@ function Carlo.read_checkpoint!(
         energies = nothing
     end
 
-    mc.spins .= MPI.scatter(spins_per_rank, comm)
+    spins_mat = MPI.scatter(spins_per_rank, comm)::Matrix{Float64}
+    @inbounds for i in eachindex(mc.spins)
+        mc.spins[i] = SVector{3,Float64}(spins_mat[1, i], spins_mat[2, i], spins_mat[3, i])
+    end
     mc.energy = MPI.Scatter(energies, Float64, comm)
     _rebuild_zlm_cache!(mc)
     return nothing

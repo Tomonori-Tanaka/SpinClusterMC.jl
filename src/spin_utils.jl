@@ -168,11 +168,11 @@ Fill the supercell spin matrix `spins` (3 × n_atoms) by tiling `initial_spins`
 renormalized to a unit vector before writing.
 """
 function _tile_base_spins!(
-    spins::Matrix{Float64},
+    spins::AbstractVector{SVector{3,Float64}},
     initial_spins::AbstractMatrix{<:Real},
     base_n_atoms::Int,
 )
-    n_atoms = size(spins, 2)
+    n_atoms = length(spins)
     size(initial_spins) == (3, base_n_atoms) || throw(ArgumentError(
         "initial_spins must be a 3×$(base_n_atoms) matrix, got $(size(initial_spins))",
     ))
@@ -183,9 +183,7 @@ function _tile_base_spins!(
         sz = Float64(initial_spins[3, ib])
         nrm = hypot(sx, sy, sz)
         nrm > 0 || throw(ArgumentError("initial_spins column $ib has zero norm"))
-        spins[1, ia] = sx / nrm
-        spins[2, ia] = sy / nrm
-        spins[3, ia] = sz / nrm
+        spins[ia] = SVector(sx / nrm, sy / nrm, sz / nrm)
     end
     return nothing
 end
