@@ -34,6 +34,10 @@
 - **球面調和関数は実数（テッサー型）**: `zlm_cache` は複素 `Ylm` ではなく実 `Zlm`。キャッシュの列数は `(l_max+1)²`（`sum_{l=0}^{L}(2l+1) = (L+1)²` による全(l,m)ペアの合計）。
 - **`Φᵥ` の定義はMagesty.jl側**: SALCの構成・CG係数の規約はこのリポジトリに書かれていない。変更前は必ず[Magesty.jl technical notes](https://Tomonori-Tanaka.github.io/Magesty.jl/technical_notes/)を参照すること。
 
+## 設計メモ
+
+保留中の設計判断・将来の実装方針は [`docs/design_notes.md`](docs/design_notes.md) に記録している。
+
 ## 設計判断
 
 ### j0（定数エネルギー項）
