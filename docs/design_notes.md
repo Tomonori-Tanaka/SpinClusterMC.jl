@@ -57,6 +57,86 @@ Carlo.measure!(mc::JPhiWolffMC, ctx)       = _mc_measure!(ctx, mc.energy, mc.spi
 
 ---
 
+## Sunny.jl を参考にした実装案（保留中）
+
+> 用語の対応：Sunny.jl の "unit cell"（conventional cell）= 本コードの「基本セル」、
+> Sunny.jl の `dims` = 本コードの `repeat`。
+> Sunny.jl の primitive cell（`primitive_cell()` で取得）= 本コードの「プリミティブセル」。
+> 参照: [Sunny.jl GitHub](https://github.com/SunnySuite/Sunny.jl)、[`docs/terminology.md`](terminology.md)
+
+### Sunny.jl の設計との比較
+
+| 観点 | Sunny.jl | SpinClusterMC.jl（現状） |
+|---|---|---|
+| 相互作用テンプレート | 基本セル1個分のみ保存、全セルをオンザフライでループ | 全インスタンスを事前列挙（`_build_cluster_instances`） |
+| ΔE 計算 | テンプレート + オンザフライでインデックス計算 | 事前列挙済みインスタンスを直接参照 |
+| メモリ | O(n_base_instances) | O(n_atoms × n_base_instances) |
+| 二重カウント防止 | `isculled` フラグ + ソート済みリストへの `break` | `_foreach_translated_instance` の `seen::Set` |
+
+### 案1：BaseClusterInstance テンプレート
+
+Sunny.jl と同様に基本セル1個分のテンプレートのみ保存し、`sweep!` でオンザフライにスーパーセルインデックスを計算する。
+
+```julia
+struct BaseClusterInstance
+    base_atoms::Vector{Int}      # 基本セル内原子インデックス（jphi.xml の atoms= 属性）
+    cbc::CoupledBasis_with_coefficient
+    prefactor::Float64
+    dims::Vector{Int}
+    strides::Vector{Int}
+    coeff_flat::Vector{Float64}
+    Mf_size::Int
+end
+
+# 基本原子 b ごとに「どのテンプレートが b を含むか」+「相対タイルオフセット」を事前計算
+struct RelatedBaseCluster
+    inst_idx::Int
+    tile_offset::NTuple{3,Int}   # actual_tile = (tile_i .+ tile_offset) .% repeat
+end
+
+struct LocalEnergyTemplate
+    base_instances::Vector{BaseClusterInstance}
+    related_by_base_atom::Vector{Vector{RelatedBaseCluster}}  # indexed by base_atom b
+end
+```
+
+`sweep!` での ΔE 計算：
+
+```julia
+b      = ((i-1) % base_n_atoms) + 1     # 基本原子
+tile_i = tile_of(i, base_n_atoms, repeat) # タイル座標
+
+for rc in template.related_by_base_atom[b]
+    inst = template.base_instances[rc.inst_idx]
+    tile = mod.(tile_i .+ rc.tile_offset, repeat)
+    atoms = [supercell_atom_index(map_sym[ba, t], tile..., base_n_atoms, repeat)
+             for (ba, t) in zip(inst.base_atoms, ...)]
+    e += inst.prefactor * _tensor_contract_cached(inst, zlm_cache, atoms)
+end
+```
+
+**効果：**
+- メモリが O(n_base_instances) に削減（スーパーセルサイズ非依存）
+- `coeff_flat` がキャッシュに乗り続けるため大きいスーパーセルで有利
+- テンソル収縮コスト自体は変わらない（支配項のため影響なし）
+
+### 案2：提案関数の差し替え可能化
+
+Sunny.jl の `LocalSampler(propose=propose_uniform)` パターン。
+Carlo アダプタ分離（`metropolis.jl` への `sweep!` 切り出し）と同時に実施するのが自然。
+
+```julia
+mc.propose::Function  # (rng, sx, sy, sz) -> (sx', sy', sz')
+```
+
+### 実装時の注意
+
+- `related_by_base_atom` の事前計算には `map_sym` と `_foreach_translated_instance` を使う
+- タイルオフセットの符号・modulo の扱いが細かい。CLAUDE.md「連動箇所」参照
+- 実装前に `benchmark_sce.jl` でベースラインを取り、変更後に同条件で比較すること
+
+---
+
 ## ClusterInstance のテンプレート化（保留中）
 
 > 用語の定義は [`docs/terminology.md`](terminology.md) を参照。
