@@ -748,8 +748,9 @@ end
 """
     sce_energy(h, spin_directions) -> Float64
 
-Total SCE Hamiltonian energy: constant offset `h.j0` plus, for each SALC index `s`, the weighted sum of
+SCE interaction energy (j0 excluded) for each SALC index `s`: the weighted sum of
 `coupled_cluster_energy` over every coupled cluster in `h.salc_list[s]`, with weights `h.jphi[s]`.
+j0 is intentionally excluded because this package is used for MC sampling where only ΔE matters.
 
 `spin_directions` should be `3 × h.n_atoms`: rows 1–3 are `x`, `y`, `z` of the spin direction; columns are
 supercell atoms (`a` → column `a`). Only the column count is checked here; each column is passed to
@@ -757,8 +758,7 @@ supercell atoms (`a` → column `a`). Only the column count is checked here; eac
 `h.base_n_atoms` as in that routine.
 """
 function sce_energy(h::SCEHamiltonian, spin_directions::AbstractMatrix{<:Real})::Float64
-    # `ReferenceEnergy` from XML is for one base cell; scale it to the tiled supercell.
-    E = h.j0 * prod(h.repeat)
+    E = 0.0
     n1, n2, n3 = h.repeat
     # Recover base-cell fractional positions from supercell positions (tile-(0,0,0) block).
     # h.pos_frac[:,ba] for ba in 1:base_n_atoms = base_frac / (n1,n2,n3).
@@ -1051,7 +1051,7 @@ function monomial_sce_energy(
     tbl = table === nothing ? first(build_monomial_table(h; tol = tol)) : table
     max_l = _max_l_in_table(tbl)
     zlm = _build_zlm_cache(spin_directions, max_l)
-    return h.j0 * prod(h.repeat) + _monomial_total_energy(tbl, zlm)
+    return _monomial_total_energy(tbl, zlm)
 end
 
 # Process-local cache for the monomial-form energy kernel, keyed identically to
@@ -1734,15 +1734,11 @@ function Carlo.init!(mc::JPhiSpinMC, ctx::MCContext, params::AbstractDict)
         end
     end
     _rebuild_zlm_cache!(mc)
-    # NOTE: matches the existing tensor-path convention `mc.ham.j0 + Σ_inst …`
-    # (i.e. `j0` is *not* scaled by `prod(repeat)` here, unlike `sce_energy`)
-    # so that switching `:energy_kernel` between `:tensor` and `:monomial`
-    # produces the same `mc.energy` up to floating-point summation order.
+    # j0 excluded: only ΔE matters for MC sampling.
     mc.energy = if mc.energy_kernel === :monomial
-        mc.ham.j0 +
         _monomial_total_energy(mc.monomial_table::MonomialTable, mc.zlm_cache)
     else
-        mc.ham.j0 + _energy_from_instances_cached(
+        _energy_from_instances_cached(
             mc.local_cache.instances[mc.active_instance_indices],
             mc.zlm_cache,
         )

@@ -185,7 +185,7 @@ end
     mc.spins .= 0.0
     mc.spins[3, :] .= 1.0
     JMCC._rebuild_zlm_cache!(mc)
-    mc.energy = mc.ham.j0 + JMCC._energy_from_instances(
+    mc.energy = JMCC._energy_from_instances(
         mc.local_cache.instances[mc.active_instance_indices], mc.spins,
     )
 
@@ -238,7 +238,7 @@ end
 
     E_ref  = sce_energy(h, spins)
     cache  = JMCC.build_local_energy_cache(h)
-    E_fast = h.j0 + JMCC._energy_from_instances(cache.instances, spins)
+    E_fast = JMCC._energy_from_instances(cache.instances, spins)
 
     @test E_ref ≈ E_fast rtol = 1e-8
 
@@ -274,7 +274,7 @@ end
 # ---------------------------------------------------------------------------
 
 @testset "SCE interaction energy is extensive for repeat=(2,2,2)" begin
-    # (E - j0)/n_atoms for a periodically-tiled spin config must be
+    # E/n_atoms for a periodically-tiled spin config must be
     # independent of repeat size.
     h1 = load_sce_hamiltonian(XML_2x2x2; repeat = (1, 1, 1))
     h2 = load_sce_hamiltonian(XML_2x2x2; repeat = (2, 2, 2))
@@ -285,8 +285,8 @@ end
         spins2[:, ia] = spins1[:, ((ia - 1) % h1.n_atoms) + 1]
     end
 
-    E_int1 = sce_energy(h1, spins1) - h1.j0 * prod(h1.repeat)
-    E_int2 = sce_energy(h2, spins2) - h2.j0 * prod(h2.repeat)
+    E_int1 = sce_energy(h1, spins1)
+    E_int2 = sce_energy(h2, spins2)
 
     @test E_int2 ≈ 8 * E_int1 rtol = 1e-8
 end

@@ -1,7 +1,10 @@
-.PHONY: test jet
+.PHONY: test test-slow jet
 
 test:
 	julia --project=. -e 'using Pkg; Pkg.test()'
+
+test-slow:
+	julia --project=. -e 'using Pkg; Pkg.test(test_args=["slow"])'
 
 # Static analysis with JET.jl.
 # Runs in a temporary environment (does not modify Manifest.toml).
