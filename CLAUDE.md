@@ -37,6 +37,7 @@
 ## 設計メモ
 
 保留中の設計判断・将来の実装方針は [`docs/design_notes.md`](docs/design_notes.md) に記録している。
+格子・セル・クラスターの用語定義は [`docs/terminology.md`](docs/terminology.md) を参照。
 
 ## 設計判断
 
