@@ -917,9 +917,9 @@ include("spin_utils.jl")
 # preventing boxing of Union{Nothing,LocalEnergyTemplate} in the hot sweep! path.
 @inline function _template_local_energy!(mc::JPhiSpinMC, i::Int)::Float64
     tpl = mc.local_template::LocalEnergyTemplate
-    n1, n2, n3 = mc.ham.repeat
-    base_n = mc.ham.base_n_atoms
     rep = mc.ham.repeat
+    n1, n2, n3 = rep
+    base_n = mc.ham.base_n_atoms
     b = ((i - 1) % base_n) + 1
     ti, tj, tk = _tile_coords(i, base_n, rep)
     e = 0.0
