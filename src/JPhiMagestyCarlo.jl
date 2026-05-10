@@ -950,7 +950,41 @@ include("spin_utils.jl")
         )
     end
 
-    # N≥3 general path
+    # N=3 fast path
+    @inbounds for rc in tpl.related3_by_base_atom[b]
+        inst3 = tpl.base_instances3[rc.inst_idx]
+        pvd = inst3.tile_deltas[rc.pivot_k]
+        pv1, pv2, pv3 = pvd[1], pvd[2], pvd[3]
+        d1a = inst3.tile_deltas[1]
+        d2a = inst3.tile_deltas[2]
+        d3a = inst3.tile_deltas[3]
+        a1 = supercell_atom_index(
+            inst3.base_atoms[1],
+            mod(ti + d1a[1] - pv1, n1),
+            mod(tj + d1a[2] - pv2, n2),
+            mod(tk + d1a[3] - pv3, n3),
+            base_n, rep,
+        )
+        a2 = supercell_atom_index(
+            inst3.base_atoms[2],
+            mod(ti + d2a[1] - pv1, n1),
+            mod(tj + d2a[2] - pv2, n2),
+            mod(tk + d2a[3] - pv3, n3),
+            base_n, rep,
+        )
+        a3 = supercell_atom_index(
+            inst3.base_atoms[3],
+            mod(ti + d3a[1] - pv1, n1),
+            mod(tj + d3a[2] - pv2, n2),
+            mod(tk + d3a[3] - pv3, n3),
+            base_n, rep,
+        )
+        e += inst3.prefactor * _tensor_contract_template3_changed!(
+            inst3, a1, a2, a3, mc.zlm_cache, i,
+        )
+    end
+
+    # N≥4 general path
     for rc in tpl.related_by_base_atom[b]
         inst = tpl.base_instances[rc.inst_idx]
         N = length(inst.base_atoms)
@@ -1268,7 +1302,9 @@ function Carlo.init!(mc::JPhiSpinMC, ctx::MCContext, params::AbstractDict)
         tpl = build_local_energy_template(mc.ham)
         mc.local_template = tpl
         max_sites_general = maximum(length(inst.base_atoms) for inst in tpl.base_instances; init = 0)
-        max_sites = isempty(tpl.base_instances2) ? max_sites_general : max(max_sites_general, 2)
+        max_sites = max_sites_general
+        isempty(tpl.base_instances2) || (max_sites = max(max_sites, 2))
+        isempty(tpl.base_instances3) || (max_sites = max(max_sites, 3))
         mc.atoms_buf = Vector{Int}(undef, max(max_sites, 1))
         # Use monomial kernel for full initial energy (avoids implementing full template sum).
         mc.energy = sce_energy(mc.ham, mc.spins)

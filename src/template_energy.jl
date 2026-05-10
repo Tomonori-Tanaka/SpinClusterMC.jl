@@ -34,11 +34,25 @@ struct BaseClusterInstance2
     Mf_size::Int
 end
 
+struct BaseClusterInstance3
+    base_atoms::SVector{3,Int}
+    tile_deltas::SVector{3,NTuple{3,Int}}
+    ls::SVector{3,Int}
+    cbc_coefficient::Vector{Float64}
+    prefactor::Float64
+    dims::SVector{3,Int}
+    strides::SVector{4,Int}                 # N+1 = 4
+    coeff_flat::Vector{Float64}
+    Mf_size::Int
+end
+
 struct LocalEnergyTemplate
-    base_instances::Vector{BaseClusterInstance}                    # N ≥ 3
+    base_instances::Vector{BaseClusterInstance}                    # N ≥ 4
     base_instances2::Vector{BaseClusterInstance2}                  # N = 2
+    base_instances3::Vector{BaseClusterInstance3}                  # N = 3
     related_by_base_atom::Vector{Vector{RelatedBaseCluster}}       # → base_instances
     related2_by_base_atom::Vector{Vector{RelatedBaseCluster}}      # → base_instances2
+    related3_by_base_atom::Vector{Vector{RelatedBaseCluster}}      # → base_instances3
 end
 
 # Iterate over unique base-cell cluster instances for `cbc` (ti=tj=tk=0 only).
@@ -85,8 +99,10 @@ reconstruction during `sweep!`.
 function build_local_energy_template(h::SCEHamiltonian)::LocalEnergyTemplate
     base_instances = BaseClusterInstance[]
     base_instances2 = BaseClusterInstance2[]
+    base_instances3 = BaseClusterInstance3[]
     related_by_base_atom = [RelatedBaseCluster[] for _ in 1:h.base_n_atoms]
     related2_by_base_atom = [RelatedBaseCluster[] for _ in 1:h.base_n_atoms]
+    related3_by_base_atom = [RelatedBaseCluster[] for _ in 1:h.base_n_atoms]
 
     coeff_flat_cache = Dict{UInt, Vector{Float64}}()
 
@@ -129,6 +145,24 @@ function build_local_energy_template(h::SCEHamiltonian)::LocalEnergyTemplate
                         b = base_atoms[k]
                         push!(related2_by_base_atom[b], RelatedBaseCluster(inst_idx, k))
                     end
+                elseif N_cbc == 3
+                    inst3 = BaseClusterInstance3(
+                        SVector{3,Int}(base_atoms[1], base_atoms[2], base_atoms[3]),
+                        SVector{3,NTuple{3,Int}}(tile_deltas[1], tile_deltas[2], tile_deltas[3]),
+                        SVector{3,Int}(cbc.ls[1], cbc.ls[2], cbc.ls[3]),
+                        collect(Float64, cbc.coefficient),
+                        prefactor,
+                        SVector{3,Int}(inst_dims[1], inst_dims[2], inst_dims[3]),
+                        SVector{4,Int}(inst_strides[1], inst_strides[2], inst_strides[3], inst_strides[4]),
+                        inst_coeff_flat,
+                        inst_Mf_size,
+                    )
+                    push!(base_instances3, inst3)
+                    inst_idx = length(base_instances3)
+                    for k in 1:3
+                        b = base_atoms[k]
+                        push!(related3_by_base_atom[b], RelatedBaseCluster(inst_idx, k))
+                    end
                 else
                     inst = BaseClusterInstance(
                         copy(base_atoms),
@@ -153,8 +187,8 @@ function build_local_energy_template(h::SCEHamiltonian)::LocalEnergyTemplate
     end
 
     return LocalEnergyTemplate(
-        base_instances, base_instances2,
-        related_by_base_atom, related2_by_base_atom,
+        base_instances, base_instances2, base_instances3,
+        related_by_base_atom, related2_by_base_atom, related3_by_base_atom,
     )
 end
 
@@ -385,6 +419,115 @@ end
         result += inst.cbc_coefficient[mf_idx] * mf_contribution
     end
     return result
+end
+
+# N=3-specialized contraction kernels.
+
+@inline function _tensor_contract_template3_cached(
+    inst::BaseClusterInstance3,
+    a1::Int, a2::Int, a3::Int,
+    zlm_cache::Matrix{Float64},
+)::Float64
+    l1 = inst.ls[1]; l2 = inst.ls[2]; l3 = inst.ls[3]
+    d1 = inst.dims[1]; d2 = inst.dims[2]; d3 = inst.dims[3]
+    s1 = inst.strides[1]; s2 = inst.strides[2]; s3 = inst.strides[3]
+    total_spatial = inst.strides[4]
+    col1_base = l1 * l1
+    col2_base = l2 * l2
+    col3_base = l3 * l3
+    Mf_size = inst.Mf_size
+    coeff_flat = inst.coeff_flat
+    result = 0.0
+    @inbounds for mf_idx in 1:Mf_size
+        base_mf = 1 + (mf_idx - 1) * total_spatial
+        mf_contribution = 0.0
+        for m3 in 1:d3
+            z3 = zlm_cache[a3, col3_base + m3]
+            base_m3 = base_mf + (m3 - 1) * s3
+            for m2 in 1:d2
+                z2 = zlm_cache[a2, col2_base + m2]
+                base_m2 = base_m3 + (m2 - 1) * s2
+                inner = 0.0
+                @simd for m1 in 1:d1
+                    inner +=
+                        coeff_flat[base_m2 + (m1 - 1) * s1] *
+                        zlm_cache[a1, col1_base + m1]
+                end
+                mf_contribution += z2 * z3 * inner
+            end
+        end
+        result += inst.cbc_coefficient[mf_idx] * mf_contribution
+    end
+    return result
+end
+
+# Inner kernel for "atom at site `chg_pos` is changed". The other two sites
+# are passed as (l, d, s, atom) triples. SIMD over the changed-site index
+# (innermost), product over the other two.
+@inline function _kernel3_chg(
+    inst::BaseClusterInstance3,
+    l_chg::Int, d_chg::Int, s_chg::Int, changed_atom::Int,
+    l_o1::Int, d_o1::Int, s_o1::Int, a_o1::Int,
+    l_o2::Int, d_o2::Int, s_o2::Int, a_o2::Int,
+    zlm_cache::Matrix{Float64},
+)::Float64
+    chg_col_base = l_chg * l_chg
+    o1_col_base = l_o1 * l_o1
+    o2_col_base = l_o2 * l_o2
+    total_spatial = inst.strides[4]
+    Mf_size = inst.Mf_size
+    coeff_flat = inst.coeff_flat
+    result = 0.0
+    @inbounds for mf_idx in 1:Mf_size
+        base_mf = 1 + (mf_idx - 1) * total_spatial
+        mf_contribution = 0.0
+        for m_o2 in 1:d_o2
+            z_o2 = zlm_cache[a_o2, o2_col_base + m_o2]
+            base_m2 = base_mf + (m_o2 - 1) * s_o2
+            for m_o1 in 1:d_o1
+                z_o1 = zlm_cache[a_o1, o1_col_base + m_o1]
+                base_m1 = base_m2 + (m_o1 - 1) * s_o1
+                inner = 0.0
+                @simd for m_chg in 1:d_chg
+                    inner +=
+                        coeff_flat[base_m1 + (m_chg - 1) * s_chg] *
+                        zlm_cache[changed_atom, chg_col_base + m_chg]
+                end
+                mf_contribution += z_o1 * z_o2 * inner
+            end
+        end
+        result += inst.cbc_coefficient[mf_idx] * mf_contribution
+    end
+    return result
+end
+
+@inline function _tensor_contract_template3_changed!(
+    inst::BaseClusterInstance3,
+    a1::Int, a2::Int, a3::Int,
+    zlm_cache::Matrix{Float64},
+    changed_atom::Int,
+)::Float64
+    if a1 == changed_atom
+        return _kernel3_chg(inst,
+            inst.ls[1], inst.dims[1], inst.strides[1], changed_atom,
+            inst.ls[2], inst.dims[2], inst.strides[2], a2,
+            inst.ls[3], inst.dims[3], inst.strides[3], a3,
+            zlm_cache)
+    elseif a2 == changed_atom
+        return _kernel3_chg(inst,
+            inst.ls[2], inst.dims[2], inst.strides[2], changed_atom,
+            inst.ls[1], inst.dims[1], inst.strides[1], a1,
+            inst.ls[3], inst.dims[3], inst.strides[3], a3,
+            zlm_cache)
+    elseif a3 == changed_atom
+        return _kernel3_chg(inst,
+            inst.ls[3], inst.dims[3], inst.strides[3], changed_atom,
+            inst.ls[1], inst.dims[1], inst.strides[1], a1,
+            inst.ls[2], inst.dims[2], inst.strides[2], a2,
+            zlm_cache)
+    else
+        return _tensor_contract_template3_cached(inst, a1, a2, a3, zlm_cache)
+    end
 end
 
 # _template_local_energy! is defined in JPhiMagestyCarlo.jl after JPhiSpinMC,

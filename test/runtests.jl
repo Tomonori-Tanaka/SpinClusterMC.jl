@@ -324,8 +324,8 @@ end
             tpl1 = JMCC.build_local_energy_template(h1)
             tpl2 = JMCC.build_local_energy_template(h2)
 
-            n_tpl1 = length(tpl1.base_instances) + length(tpl1.base_instances2)
-            n_tpl2 = length(tpl2.base_instances) + length(tpl2.base_instances2)
+            n_tpl1 = length(tpl1.base_instances) + length(tpl1.base_instances2) + length(tpl1.base_instances3)
+            n_tpl2 = length(tpl2.base_instances) + length(tpl2.base_instances2) + length(tpl2.base_instances3)
 
             cache1 = JMCC.build_local_energy_cache(h1)
             @test n_tpl1 == length(cache1.instances)
@@ -337,6 +337,8 @@ end
             @test length(tpl2.related_by_base_atom) == h2.base_n_atoms
             @test length(tpl1.related2_by_base_atom) == h1.base_n_atoms
             @test length(tpl2.related2_by_base_atom) == h2.base_n_atoms
+            @test length(tpl1.related3_by_base_atom) == h1.base_n_atoms
+            @test length(tpl2.related3_by_base_atom) == h2.base_n_atoms
         end
 
         @testset "tensor_template delta-energy matches tensor kernel" begin
@@ -356,7 +358,9 @@ end
                 zlm = JMCC._build_zlm_cache(spins, max_l)
 
                 max_sites_general = maximum(length(inst.base_atoms) for inst in tpl.base_instances; init=1)
-                max_sites = isempty(tpl.base_instances2) ? max_sites_general : max(max_sites_general, 2)
+                max_sites = max_sites_general
+                isempty(tpl.base_instances2) || (max_sites = max(max_sites, 2))
+                isempty(tpl.base_instances3) || (max_sites = max(max_sites, 3))
                 buf_other = Vector{Int}(undef, max(max_sites, 1))
                 buf_cart  = Vector{Int}(undef, max(max_sites, 1))
                 atoms_buf = Vector{Int}(undef, max(max_sites, 1))
@@ -400,6 +404,36 @@ end
                         )
                         E_tpl += inst2.prefactor * JMCC._tensor_contract_template2_changed!(
                             inst2, a1, a2, zlm, atom,
+                        )
+                    end
+                    for rc in tpl.related3_by_base_atom[b]
+                        inst3 = tpl.base_instances3[rc.inst_idx]
+                        pvd = inst3.tile_deltas[rc.pivot_k]
+                        pv1, pv2, pv3 = pvd[1], pvd[2], pvd[3]
+                        d1a = inst3.tile_deltas[1]; d2a = inst3.tile_deltas[2]; d3a = inst3.tile_deltas[3]
+                        a1 = supercell_atom_index(
+                            inst3.base_atoms[1],
+                            mod(ti + d1a[1] - pv1, n1),
+                            mod(tj + d1a[2] - pv2, n2),
+                            mod(tk + d1a[3] - pv3, n3),
+                            base_n, h.repeat,
+                        )
+                        a2 = supercell_atom_index(
+                            inst3.base_atoms[2],
+                            mod(ti + d2a[1] - pv1, n1),
+                            mod(tj + d2a[2] - pv2, n2),
+                            mod(tk + d2a[3] - pv3, n3),
+                            base_n, h.repeat,
+                        )
+                        a3 = supercell_atom_index(
+                            inst3.base_atoms[3],
+                            mod(ti + d3a[1] - pv1, n1),
+                            mod(tj + d3a[2] - pv2, n2),
+                            mod(tk + d3a[3] - pv3, n3),
+                            base_n, h.repeat,
+                        )
+                        E_tpl += inst3.prefactor * JMCC._tensor_contract_template3_changed!(
+                            inst3, a1, a2, a3, zlm, atom,
                         )
                     end
                     for rc in tpl.related_by_base_atom[b]
