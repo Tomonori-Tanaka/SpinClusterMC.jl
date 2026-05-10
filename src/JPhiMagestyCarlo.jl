@@ -314,7 +314,7 @@ same tensor contraction. Deduplication always uses **sorted supercell atom indic
 """
 function coupled_cluster_energy(
     cbc::CoupledBasis_with_coefficient,
-    spin_directions::AbstractMatrix{<:Real},
+    spin_directions::Union{AbstractMatrix{<:Real},AbstractVector{<:SVector{3,<:Real}}},
     map_sym::AbstractMatrix{Int};
     repeat::NTuple{3, Int} = (1, 1, 1),
     base_n_atoms::Int = size(map_sym, 1),
@@ -323,8 +323,8 @@ function coupled_cluster_energy(
     n_trans = size(map_sym, 2)
     n1, n2, n3 = repeat
     n_expect = base_n_atoms * n1 * n2 * n3
-    size(spin_directions, 2) == n_expect ||
-        throw(ArgumentError("spin columns $(size(spin_directions,2)) != supercell atoms $n_expect"))
+    _n_spins(spin_directions) == n_expect ||
+        throw(ArgumentError("spin count $(_n_spins(spin_directions)) != supercell atoms $n_expect"))
     result = 0.0
     N = length(cbc.atoms)
     scaling = _cluster_scaling(N)
@@ -364,9 +364,9 @@ function coupled_cluster_energy(
                     for (site_idx, atom) in enumerate(translated_atoms)
                         l = cbc.ls[site_idx]
                         sh_values[site_idx] = Vector{Float64}(undef, 2 * l + 1)
+                        u = _spin_at(spin_directions, atom)
                         for m_idx in 1:(2 * l + 1)
                             m = m_idx - l - 1
-                            u = @view spin_directions[:, atom]
                             sh_values[site_idx][m_idx] = Zₗₘ_unsafe(l, m, u)
                         end
                     end
@@ -402,16 +402,16 @@ Evaluate one cluster tensor contraction for the provided translated atoms.
 @inline function _tensor_contract_instance(
     cbc::CoupledBasis_with_coefficient,
     translated_atoms::Vector{Int},
-    spin_directions::AbstractMatrix{<:Real},
+    spin_directions::Union{AbstractMatrix{<:Real},AbstractVector{<:SVector{3,<:Real}}},
 )::Float64
     N = length(cbc.atoms)
     sh_values = Vector{Vector{Float64}}(undef, N)
     for (site_idx, atom) in enumerate(translated_atoms)
         l = cbc.ls[site_idx]
         sh_values[site_idx] = Vector{Float64}(undef, 2 * l + 1)
+        u = _spin_at(spin_directions, atom)
         for m_idx in 1:(2 * l + 1)
             m = m_idx - l - 1
-            u = @view spin_directions[:, atom]
             sh_values[site_idx][m_idx] = Zₗₘ_unsafe(l, m, u)
         end
     end
@@ -571,7 +571,7 @@ Accumulate total interaction energy from prebuilt cluster instances.
 """
 function _energy_from_instances(
     instances::Vector{ClusterInstance},
-    spin_directions::AbstractMatrix{<:Real},
+    spin_directions::Union{AbstractMatrix{<:Real},AbstractVector{<:SVector{3,<:Real}}},
 )::Float64
     E = 0.0
     for inst in instances
@@ -608,7 +608,10 @@ supercell atoms (`a` → column `a`). Only the column count is checked here; eac
 `Zₗₘ_unsafe` as a 3-vector inside `coupled_cluster_energy`. Shape matches `h.map_sym`, `h.repeat`, and
 `h.base_n_atoms` as in that routine.
 """
-function sce_energy(h::SCEHamiltonian, spin_directions::AbstractMatrix{<:Real})::Float64
+function sce_energy(
+    h::SCEHamiltonian,
+    spin_directions::Union{AbstractMatrix{<:Real},AbstractVector{<:SVector{3,<:Real}}},
+)::Float64
     E = 0.0
     n1, n2, n3 = h.repeat
     # Recover base-cell fractional positions from supercell positions (tile-(0,0,0) block).

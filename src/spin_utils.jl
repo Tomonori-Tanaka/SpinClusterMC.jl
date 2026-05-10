@@ -1,5 +1,42 @@
 # --- Spin utilities: Zlm cache, spin proposals, supercell initialization ---
 
+# Generic accessors so energy kernels accept either Matrix{Float64} (3 × n)
+# or Vector{SVector{3,Float64}} for the spin storage.
+@inline _n_spins(s::AbstractMatrix)::Int = size(s, 2)
+@inline _n_spins(s::AbstractVector{<:SVector{3}})::Int = length(s)
+
+@inline _spin_at(s::AbstractMatrix, atom::Int) = @view s[:, atom]
+@inline _spin_at(s::AbstractVector{<:SVector{3}}, atom::Int) = @inbounds s[atom]
+
+"""
+Convert internal `Vector{SVector{3,Float64}}` storage to `Matrix{Float64}` (3 × n)
+for serialization, the public `:initial_spins` parameter, and other Matrix-shaped
+boundaries.
+"""
+function _spins_to_matrix(spins::AbstractVector{<:SVector{3,<:Real}})::Matrix{Float64}
+    n = length(spins)
+    M = Matrix{Float64}(undef, 3, n)
+    @inbounds for i in 1:n
+        s = spins[i]
+        M[1, i] = s[1]; M[2, i] = s[2]; M[3, i] = s[3]
+    end
+    return M
+end
+
+"""
+Inverse of [`_spins_to_matrix`](@ref): build a `Vector{SVector{3,Float64}}` from a
+`3 × n` matrix.  Throws if the row count is not 3.
+"""
+function _matrix_to_spins(M::AbstractMatrix{<:Real})::Vector{SVector{3,Float64}}
+    size(M, 1) == 3 || throw(ArgumentError("spin matrix must have 3 rows, got $(size(M,1))"))
+    n = size(M, 2)
+    out = Vector{SVector{3,Float64}}(undef, n)
+    @inbounds for i in 1:n
+        out[i] = SVector{3,Float64}(M[1, i], M[2, i], M[3, i])
+    end
+    return out
+end
+
 """
 Return the maximum cluster size among all instances.
 """
@@ -64,14 +101,14 @@ Rows index atoms; columns index `(l, m)` via `_zlm_col`. Useful for standalone f
 evaluation, e.g. in global update algorithms or benchmarks.
 """
 function _build_zlm_cache(
-    spin_directions::AbstractMatrix{<:Real},
+    spin_directions::Union{AbstractMatrix{<:Real},AbstractVector{<:SVector{3,<:Real}}},
     max_l::Int,
 )::Matrix{Float64}
-    n_atoms = size(spin_directions, 2)
+    n_atoms = _n_spins(spin_directions)
     ncols = (max_l + 1)^2
     zlm_cache = Matrix{Float64}(undef, n_atoms, ncols)
     @inbounds for atom in 1:n_atoms
-        _update_atom_zlm_cache!(zlm_cache, atom, @view(spin_directions[:, atom]), max_l)
+        _update_atom_zlm_cache!(zlm_cache, atom, _spin_at(spin_directions, atom), max_l)
     end
     return zlm_cache
 end
