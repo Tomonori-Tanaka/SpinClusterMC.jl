@@ -36,158 +36,7 @@ export SCEHamiltonian,
     monomial_sce_energy,
     JPhiSpinMC
 
-# --- XML: lattice, positions, translation maps (infer missing rows from geometry if XML lists prim atoms only) ---
-
-struct SystemXMLInfo
-    n_atoms::Int
-    lattice::Matrix{Float64}
-    periodicity::NTuple{3, Int}
-    pos_frac::Matrix{Float64}
-    n_trans::Int
-    map_sym::Matrix{Int}
-end
-
-"""
-Parse a whitespace-separated 3-vector string into `Float64` values.
-"""
-function _parse_vec3(s::AbstractString)
-    p = parse.(Float64, split(s))
-    length(p) == 3 || throw(ArgumentError("expected 3 floats, got $(repr(s))"))
-    return p
-end
-
-"""
-Wrap fractional coordinates into the minimum-image range around zero.
-"""
-function _min_image_frac(v::AbstractVector{<:Real})
-    w = collect(Float64, v)
-    @inbounds for i in eachindex(w)
-        w[i] -= round(w[i])
-    end
-    return w
-end
-
-"""
-Compute minimum-image distance between two fractional coordinates.
-"""
-function _frac_periodic_dist(a::AbstractVector{<:Real}, b::AbstractVector{<:Real})
-    return norm(_min_image_frac(a .- b))
-end
-
-"""
-Fill missing entries of translation `t` in `map_sym` by periodic nearest-image matching.
-
-# Arguments
-- `map_sym::Matrix{Int}`: Translation map table (`atom × trans`) updated in place.
-- `pos_frac::AbstractMatrix{Float64}`: Fractional atomic positions (`3 × n_atoms`).
-- `t::Int`: Translation-column index to complete.
-- `n_atoms::Int`: Number of atoms to process in the base cell.
-"""
-function _infer_atom_map_from_atom1!(
-    map_sym::Matrix{Int},
-    pos_frac::AbstractMatrix{Float64},
-    t::Int,
-    n_atoms::Int,
-)
-    j1 = map_sym[1, t]
-    j1 == 0 && error("translation $t: missing map for atom 1, cannot infer other atoms")
-    δ = _min_image_frac(pos_frac[:, j1] - pos_frac[:, 1])
-    for j in 1:n_atoms
-        map_sym[j, t] != 0 && continue
-        target = pos_frac[:, j] + δ
-        target .-= floor.(target)
-        best_k = 0
-        best_d = Inf
-        for k in 1:n_atoms
-            d = _frac_periodic_dist(pos_frac[:, k], target)
-            if d < best_d
-                best_d = d
-                best_k = k
-            end
-        end
-        best_d < 1e-5 || error(
-            "translation $t: could not infer image of atom $j (best periodic dist=$best_d)",
-        )
-        map_sym[j, t] = best_k
-    end
-    return nothing
-end
-
-function parse_system_xml(xml_path::AbstractString)::SystemXMLInfo
-    doc = readxml(xml_path)
-    system_node = findfirst("//System", doc)
-    isnothing(system_node) && throw(ArgumentError("no //System in $xml_path"))
-
-    natoms_node = findfirst("NumberOfAtoms", system_node)
-    isnothing(natoms_node) && throw(ArgumentError("no NumberOfAtoms in $xml_path"))
-    n_atoms = parse(Int, nodecontent(natoms_node))
-
-    lat_node = findfirst("LatticeVector", system_node)
-    isnothing(lat_node) && throw(ArgumentError("no LatticeVector in $xml_path"))
-    a1_node = findfirst("a1", lat_node); isnothing(a1_node) && throw(ArgumentError("no a1 in $xml_path"))
-    a2_node = findfirst("a2", lat_node); isnothing(a2_node) && throw(ArgumentError("no a2 in $xml_path"))
-    a3_node = findfirst("a3", lat_node); isnothing(a3_node) && throw(ArgumentError("no a3 in $xml_path"))
-    a1 = _parse_vec3(nodecontent(a1_node))
-    a2 = _parse_vec3(nodecontent(a2_node))
-    a3 = _parse_vec3(nodecontent(a3_node))
-    lattice = hcat(a1, a2, a3)
-
-    per_el = findfirst("Periodicity", system_node)
-    isnothing(per_el) && throw(ArgumentError("no Periodicity in $xml_path"))
-    per_ints = parse.(Int, split(nodecontent(per_el)))
-    length(per_ints) == 3 || throw(ArgumentError("Periodicity must have 3 integers"))
-    per = (per_ints[1], per_ints[2], per_ints[3])
-
-    pos_frac = zeros(3, n_atoms)
-    pos_block = findfirst("Positions", system_node)
-    isnothing(pos_block) && throw(ArgumentError("no Positions in $xml_path"))
-    for p in findall("pos", pos_block)
-        ia = parse(Int, p["atom_index"])
-        pos_frac[:, ia] .= _parse_vec3(nodecontent(p))
-    end
-
-    sym_node = findfirst("Symmetry", system_node)
-    isnothing(sym_node) && throw(ArgumentError("no Symmetry in $xml_path"))
-    ntrans_node = findfirst("NumberOfTranslations", sym_node)
-    isnothing(ntrans_node) && throw(ArgumentError("no NumberOfTranslations in $xml_path"))
-    n_trans = parse(Int, nodecontent(ntrans_node))
-    trans_block = findfirst("Translations", sym_node)
-    isnothing(trans_block) && throw(ArgumentError("no Translations in $xml_path"))
-    map_sym = zeros(Int, n_atoms, n_trans)
-    for m in findall("map", trans_block)
-        t = parse(Int, m["trans"])
-        a = parse(Int, m["atom"])
-        dest = parse(Int, nodecontent(m))
-        (1 ≤ t ≤ n_trans && 1 ≤ a ≤ n_atoms) || throw(ArgumentError("invalid map trans=$t atom=$a"))
-        map_sym[a, t] = dest
-    end
-
-    for t in 1:n_trans
-        if any(iszero, map_sym[:, t])
-            _infer_atom_map_from_atom1!(map_sym, pos_frac, t, n_atoms)
-        end
-    end
-
-    return SystemXMLInfo(n_atoms, lattice, per, pos_frac, n_trans, map_sym)
-end
-
-function read_jphi_coefficients(xml_path::AbstractString)::Tuple{Float64, Vector{Float64}}
-    doc = readxml(xml_path)
-    jnode = findfirst("//JPhi", doc)
-    isnothing(jnode) && throw(ArgumentError("no //JPhi in $xml_path"))
-    ref_node = findfirst("ReferenceEnergy", jnode)
-    isnothing(ref_node) && throw(ArgumentError("no ReferenceEnergy in $xml_path"))
-    j0 = parse(Float64, nodecontent(ref_node))
-    pairs = Tuple{Int, Float64}[]
-    for el in findall("jphi", jnode)
-        push!(pairs, (parse(Int, el["salc_index"]), parse(Float64, nodecontent(el))))
-    end
-    sort!(pairs)
-    for (i, (si, _)) in enumerate(pairs)
-        si == i || throw(ArgumentError("jphi salc_index must be 1..n without gaps; got index $si at position $i"))
-    end
-    return j0, last.(pairs)
-end
+include("xml_io.jl")
 
 """
 	SCEHamiltonian
@@ -1269,63 +1118,7 @@ function JPhiSpinMC(params::AbstractDict)
     )
 end
 
-"""
-Return the maximum cluster size among all instances.
-"""
-function _max_sites_in_instances(instances::Vector{ClusterInstance})::Int
-    m = 1
-    for inst in instances
-        n = length(inst.atoms)
-        if n > m
-            m = n
-        end
-    end
-    return m
-end
-
-"""
-Return the maximum angular-momentum degree `l` across all instances.
-"""
-function _max_l_in_instances(instances::Vector{ClusterInstance})::Int
-    m = 0
-    for inst in instances
-        for l in inst.cbc.ls
-            m = max(m, l)
-        end
-    end
-    return m
-end
-
-"""
-Map `(l, m_idx)` to a contiguous cache column index.
-"""
-@inline _zlm_col(l::Int, m_idx::Int)::Int = l * l + m_idx
-
-"""
-Allocate per-atom cache for all real spherical harmonics up to `max_l`.
-"""
-function _alloc_zlm_cache(n_atoms::Int, max_l::Int)::Matrix{Float64}
-    # sum_{l=0}^{L} (2l+1) = (L+1)^2
-    return zeros(Float64, n_atoms, (max_l + 1)^2)
-end
-
-"""
-Refresh cached `Z_lm` values for one atom from its current spin.
-"""
-function _update_atom_zlm_cache!(
-    zlm_cache::Matrix{Float64},
-    atom::Int,
-    u::AbstractVector{<:Real},
-    max_l::Int,
-)
-    @inbounds for l in 0:max_l
-        @simd for m_idx in 1:(2 * l + 1)
-            m = m_idx - l - 1
-            zlm_cache[atom, _zlm_col(l, m_idx)] = Zₗₘ_unsafe(l, m, u)
-        end
-    end
-    return nothing
-end
+include("spin_utils.jl")
 
 """
 Rebuild the full per-atom `Z_lm` cache from current MC spins.
@@ -1335,24 +1128,6 @@ function _rebuild_zlm_cache!(mc::JPhiSpinMC)
         _update_atom_zlm_cache!(mc.zlm_cache, atom, @view(mc.spins[:, atom]), mc.max_l)
     end
     return nothing
-end
-
-"""
-Build a per-atom `Z_lm` cache from a spin matrix without requiring a `JPhiSpinMC` instance.
-Rows index atoms; columns index `(l, m)` via `_zlm_col`. Useful for standalone full-energy
-evaluation, e.g. in global update algorithms or benchmarks.
-"""
-function _build_zlm_cache(
-    spin_directions::AbstractMatrix{<:Real},
-    max_l::Int,
-)::Matrix{Float64}
-    n_atoms = size(spin_directions, 2)
-    ncols = (max_l + 1)^2
-    zlm_cache = Matrix{Float64}(undef, n_atoms, ncols)
-    @inbounds for atom in 1:n_atoms
-        _update_atom_zlm_cache!(zlm_cache, atom, @view(spin_directions[:, atom]), max_l)
-    end
-    return zlm_cache
 end
 
 """
@@ -1455,51 +1230,6 @@ function _parse_repeat_param(params::AbstractDict)::NTuple{3, Int}
         return (Int(r[1]), Int(r[2]), Int(r[3]))
     end
     return (1, 1, 1)
-end
-
-"""
-Sample a random unit vector uniformly on the sphere.
-"""
-@inline function _rand_unit_spin(rng)
-    z = 2.0 * rand(rng) - 1.0
-    ϕ = 2π * rand(rng)
-    r = sqrt(max(0.0, 1.0 - z^2))
-    return r * cos(ϕ), r * sin(ϕ), z
-end
-
-"""
-    _propose_spin_geodesic(rng, ux, uy, uz, theta_max)
-
-Unit-vector proposal `u' = cos(θ) u + sin(θ) t` with `t` a random unit tangent at `u` and
-`θ` uniform in `[-theta_max, theta_max]`. For moderate `theta_max`, moves stay close to the
-current direction and Metropolis acceptance is typically much higher than i.i.d. uniform spins.
-"""
-@inline function _propose_spin_geodesic(
-    rng,
-    ux::Float64,
-    uy::Float64,
-    uz::Float64,
-    theta_max::Float64,
-)
-    rx = randn(rng)
-    ry = randn(rng)
-    rz = randn(rng)
-    dot = rx * ux + ry * uy + rz * uz
-    tx = rx - dot * ux
-    ty = ry - dot * uy
-    tz = rz - dot * uz
-    nrm = hypot(tx, ty, tz)
-    if nrm < 1e-14
-        return _rand_unit_spin(rng)
-    end
-    invn = 1.0 / nrm
-    tx *= invn
-    ty *= invn
-    tz *= invn
-    θ = theta_max * (2.0 * rand(rng) - 1.0)
-    c = cos(θ)
-    s = sin(θ)
-    return c * ux + s * tx, c * uy + s * ty, c * uz + s * tz
 end
 
 """
@@ -1632,38 +1362,6 @@ Strides and dims are read from `inst.strides` / `inst.dims` (precomputed at buil
     end
 
     return tensor_result
-end
-
-"""
-    _tile_base_spins!(spins, initial_spins, base_n_atoms)
-
-Fill the supercell spin matrix `spins` (3 × n_atoms) by tiling `initial_spins`
-(3 × base_n_atoms).  The tiling follows the same atom-index convention as
-`supercell_atom_index`: supercell atom `ia` maps to base atom
-`((ia-1) % base_n_atoms) + 1`.  Each column of `initial_spins` is
-renormalized to a unit vector before writing.
-"""
-function _tile_base_spins!(
-    spins::Matrix{Float64},
-    initial_spins::AbstractMatrix{<:Real},
-    base_n_atoms::Int,
-)
-    n_atoms = size(spins, 2)
-    size(initial_spins) == (3, base_n_atoms) || throw(ArgumentError(
-        "initial_spins must be a 3×$(base_n_atoms) matrix, got $(size(initial_spins))",
-    ))
-    for ia in 1:n_atoms
-        ib = ((ia - 1) % base_n_atoms) + 1
-        sx = Float64(initial_spins[1, ib])
-        sy = Float64(initial_spins[2, ib])
-        sz = Float64(initial_spins[3, ib])
-        nrm = hypot(sx, sy, sz)
-        nrm > 0 || throw(ArgumentError("initial_spins column $ib has zero norm"))
-        spins[1, ia] = sx / nrm
-        spins[2, ia] = sy / nrm
-        spins[3, ia] = sz / nrm
-    end
-    return nothing
 end
 
 """
