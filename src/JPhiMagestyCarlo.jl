@@ -18,6 +18,7 @@ using MPI
 using EzXML
 using LinearAlgebra
 using Random
+using StaticArrays
 import Serialization
 
 using Magesty.Basis: CoupledBasis_with_coefficient
@@ -629,6 +630,7 @@ function sce_energy(h::SCEHamiltonian, spin_directions::AbstractMatrix{<:Real}):
 end
 
 include("monomial_energy.jl")
+include("template_energy.jl")
 
 # --- Carlo.AbstractMC ---
 
@@ -766,6 +768,9 @@ mutable struct JPhiSpinMC <: AbstractMC
     # Populated only when `energy_kernel === :monomial`.
     monomial_table::Union{Nothing,MonomialTable}
     monomial_by_atom::Vector{Vector{Int}}
+    # Populated only when `energy_kernel === :tensor_template`.
+    local_template::Union{Nothing,LocalEnergyTemplate}
+    atoms_buf::Vector{Int}  # reused buffer in sweep! to avoid per-instance allocation
 end
 
 @inline interaction_partners(mc::JPhiSpinMC, atom::Int)::Vector{Int} =
@@ -774,18 +779,47 @@ end
 @inline interaction_partners_by_body(mc::JPhiSpinMC, atom::Int)::Dict{Int, Vector{Int}} =
     interaction_partners_by_body(mc.local_cache, atom)
 
+# Compute max_l, max_sites, and body_list directly from the SALC list, without
+# enumerating all translated instances.  Used by :tensor_template to avoid the
+# O(n_atoms × n_base_instances) full cache build.
+function _salc_max_l_max_sites_bodies(
+    h::SCEHamiltonian,
+    enabled_bodies::Union{Nothing, Vector{Int}},
+)::Tuple{Int, Int, Vector{Int}}
+    body_set = Set{Int}()
+    max_l = 0
+    max_sites = 0
+    for group in h.salc_list
+        for cbc in group
+            N = length(cbc.atoms)
+            enabled_bodies === nothing || N in enabled_bodies || continue
+            push!(body_set, N)
+            max_sites < N && (max_sites = N)
+            for l in cbc.ls
+                max_l < l && (max_l = l)
+            end
+        end
+    end
+    return max_l, max_sites, sort!(collect(body_set))
+end
+
 function JPhiSpinMC(params::AbstractDict)
     xml = params[:xml_path]
     rep = _parse_repeat_param(params)
-    # MPI-aware: only rank 0 builds from XML; all ranks share via Bcast.
-    ham, cache = _mpi_build_ham_and_cache(xml, rep)
     T = Float64(params[:T])
-    active_body_indices = _parse_enabled_body_indices(params, cache.body_list)
-    derived = _get_or_build_derived(xml, rep, active_body_indices, cache, ham.n_atoms)
-    zlm_cache = _alloc_zlm_cache(ham.n_atoms, derived.max_l)
-    zlm_row_buf = Vector{Float64}(undef, (derived.max_l + 1)^2)
-    other_sites_work = Vector{Int}(undef, derived.max_sites)
-    cart_idx_work = Vector{Int}(undef, derived.max_sites)
+    enabled_bodies = if haskey(params, :enabled_bodies)
+        Int.(collect(params[:enabled_bodies]))
+    else
+        nothing
+    end
+    energy_kernel = if haskey(params, :energy_kernel)
+        sym = Symbol(params[:energy_kernel])
+        sym in (:tensor, :monomial, :tensor_template) ||
+            throw(ArgumentError("energy_kernel must be :tensor, :monomial, or :tensor_template, got $sym"))
+        sym
+    else
+        :tensor
+    end
     spin_theta_max = if haskey(params, :spin_theta_max)
         θ = Float64(params[:spin_theta_max])
         θ > 0.0 || throw(ArgumentError("spin_theta_max must be positive, got $θ"))
@@ -800,19 +834,49 @@ function JPhiSpinMC(params::AbstractDict)
     else
         1000
     end
-    enabled_bodies = if haskey(params, :enabled_bodies)
-        Int.(collect(params[:enabled_bodies]))
-    else
-        nothing
+
+    if energy_kernel === :tensor_template
+        # Skip the O(n_atoms × n_base) full cache build. Build only the ham and
+        # derive max_l / max_sites / body_list directly from the SALC list.
+        ham = get!(_HAM_CACHE, (xml, rep)) do
+            load_sce_hamiltonian(xml; repeat = rep)
+        end
+        max_l, max_sites, body_list = _salc_max_l_max_sites_bodies(ham, enabled_bodies)
+        active_body_indices = collect(eachindex(body_list))
+        n = ham.n_atoms
+        # Stub cache: empty instances; partners_* are unused by :tensor_template sweep!.
+        stub_cache = LocalEnergyCache(
+            ClusterInstance[],
+            body_list,
+            [[Int[] for _ in 1:n] for _ in body_list],
+            [Int[] for _ in 1:n],
+            [[Int[] for _ in 1:n] for _ in body_list],
+        )
+        zlm_cache       = _alloc_zlm_cache(n, max_l)
+        zlm_row_buf     = Vector{Float64}(undef, (max_l + 1)^2)
+        other_sites_buf = Vector{Int}(undef, max(max_sites, 1))
+        cart_idx_buf    = Vector{Int}(undef, max(max_sites, 1))
+        return JPhiSpinMC(
+            T, ham, zeros(3, n), 0.0,
+            stub_cache,
+            active_body_indices, Int[], [Int[] for _ in 1:n],
+            max_l, zlm_cache, zlm_row_buf,
+            other_sites_buf, cart_idx_buf,
+            spin_theta_max, renorm_every, 0,
+            xml, rep, enabled_bodies, energy_kernel,
+            nothing, [Int[] for _ in 1:n],
+            nothing, Int[],
+        )
     end
-    energy_kernel = if haskey(params, :energy_kernel)
-        sym = Symbol(params[:energy_kernel])
-        sym in (:tensor, :monomial) ||
-            throw(ArgumentError("energy_kernel must be :tensor or :monomial, got $sym"))
-        sym
-    else
-        :tensor
-    end
+
+    # :tensor / :monomial path: build the full LocalEnergyCache.
+    ham, cache = _mpi_build_ham_and_cache(xml, rep)
+    active_body_indices = _parse_enabled_body_indices(params, cache.body_list)
+    derived = _get_or_build_derived(xml, rep, active_body_indices, cache, ham.n_atoms)
+    zlm_cache = _alloc_zlm_cache(ham.n_atoms, derived.max_l)
+    zlm_row_buf = Vector{Float64}(undef, (derived.max_l + 1)^2)
+    other_sites_work = Vector{Int}(undef, derived.max_sites)
+    cart_idx_work = Vector{Int}(undef, derived.max_sites)
     monomial_table, monomial_by_atom = if energy_kernel === :monomial
         mk = _get_or_build_monomial_kernel(xml, rep, enabled_bodies, ham)
         (mk.table, mk.by_atom)
@@ -842,10 +906,77 @@ function JPhiSpinMC(params::AbstractDict)
         energy_kernel,
         monomial_table,
         monomial_by_atom,
+        nothing,   # local_template: populated in Carlo.init!
+        Int[],     # atoms_buf: sized in Carlo.init!
     )
 end
 
 include("spin_utils.jl")
+
+# Defined here (after JPhiSpinMC) so mc::JPhiSpinMC type annotation is available,
+# preventing boxing of Union{Nothing,LocalEnergyTemplate} in the hot sweep! path.
+@inline function _template_local_energy!(mc::JPhiSpinMC, i::Int)::Float64
+    tpl = mc.local_template::LocalEnergyTemplate
+    n1, n2, n3 = mc.ham.repeat
+    base_n = mc.ham.base_n_atoms
+    rep = mc.ham.repeat
+    b = ((i - 1) % base_n) + 1
+    ti, tj, tk = _tile_coords(i, base_n, rep)
+    e = 0.0
+
+    # N=2 fast path: SVector fields, no buffers needed.
+    @inbounds for rc in tpl.related2_by_base_atom[b]
+        inst2 = tpl.base_instances2[rc.inst_idx]
+        pvd = inst2.tile_deltas[rc.pivot_k]
+        pv1, pv2, pv3 = pvd[1], pvd[2], pvd[3]
+        d1a = inst2.tile_deltas[1]
+        d2a = inst2.tile_deltas[2]
+        a1 = supercell_atom_index(
+            inst2.base_atoms[1],
+            mod(ti + d1a[1] - pv1, n1),
+            mod(tj + d1a[2] - pv2, n2),
+            mod(tk + d1a[3] - pv3, n3),
+            base_n, rep,
+        )
+        a2 = supercell_atom_index(
+            inst2.base_atoms[2],
+            mod(ti + d2a[1] - pv1, n1),
+            mod(tj + d2a[2] - pv2, n2),
+            mod(tk + d2a[3] - pv3, n3),
+            base_n, rep,
+        )
+        e += inst2.prefactor * _tensor_contract_template2_changed!(
+            inst2, a1, a2, mc.zlm_cache, i,
+        )
+    end
+
+    # N≥3 general path
+    for rc in tpl.related_by_base_atom[b]
+        inst = tpl.base_instances[rc.inst_idx]
+        N = length(inst.base_atoms)
+        pv1, pv2, pv3 = inst.tile_deltas[rc.pivot_k]
+        @inbounds for k in 1:N
+            d1, d2, d3 = inst.tile_deltas[k]
+            mc.atoms_buf[k] = supercell_atom_index(
+                inst.base_atoms[k],
+                mod(ti + d1 - pv1, n1),
+                mod(tj + d2 - pv2, n2),
+                mod(tk + d3 - pv3, n3),
+                base_n,
+                rep,
+            )
+        end
+        e += inst.prefactor * _tensor_contract_template_changed!(
+            mc.contract_other_sites,
+            mc.contract_cart_idx,
+            inst,
+            mc.atoms_buf,
+            mc.zlm_cache,
+            i,
+        )
+    end
+    return e
+end
 
 """
 Rebuild the full per-atom `Z_lm` cache from current MC spins.
@@ -1131,10 +1262,18 @@ function Carlo.init!(mc::JPhiSpinMC, ctx::MCContext, params::AbstractDict)
     end
     _rebuild_zlm_cache!(mc)
     # j0 excluded: only ΔE matters for MC sampling.
-    mc.energy = if mc.energy_kernel === :monomial
-        _monomial_total_energy(mc.monomial_table::MonomialTable, mc.zlm_cache)
+    if mc.energy_kernel === :monomial
+        mc.energy = _monomial_total_energy(mc.monomial_table::MonomialTable, mc.zlm_cache)
+    elseif mc.energy_kernel === :tensor_template
+        tpl = build_local_energy_template(mc.ham)
+        mc.local_template = tpl
+        max_sites_general = maximum(length(inst.base_atoms) for inst in tpl.base_instances; init = 0)
+        max_sites = isempty(tpl.base_instances2) ? max_sites_general : max(max_sites_general, 2)
+        mc.atoms_buf = Vector{Int}(undef, max(max_sites, 1))
+        # Use monomial kernel for full initial energy (avoids implementing full template sum).
+        mc.energy = sce_energy(mc.ham, mc.spins)
     else
-        _energy_from_instances_cached(
+        mc.energy = _energy_from_instances_cached(
             mc.local_cache.instances[mc.active_instance_indices],
             mc.zlm_cache,
         )
@@ -1145,14 +1284,17 @@ end
 function Carlo.sweep!(mc::JPhiSpinMC, ctx::MCContext)
     n = mc.ham.n_atoms
     use_monomial = mc.energy_kernel === :monomial
+    use_template = mc.energy_kernel === :tensor_template
     mono_table = mc.monomial_table
     @inbounds for _ in 1:n
         i = rand(ctx.rng, 1:n)
-        related_instances = use_monomial ? Int[] : mc.related_instances_by_atom[i]
+        related_instances = (use_monomial || use_template) ? Int[] : mc.related_instances_by_atom[i]
         related_monos = use_monomial ? mc.monomial_by_atom[i] : Int[]
 
         E_old_local = if use_monomial
             _monomial_local_energy(mono_table::MonomialTable, mc.zlm_cache, related_monos)
+        elseif use_template
+            _template_local_energy!(mc, i)
         else
             e = 0.0
             for inst_idx in related_instances
@@ -1186,6 +1328,8 @@ function Carlo.sweep!(mc::JPhiSpinMC, ctx::MCContext)
 
         E_new_local = if use_monomial
             _monomial_local_energy(mono_table::MonomialTable, mc.zlm_cache, related_monos)
+        elseif use_template
+            _template_local_energy!(mc, i)
         else
             e = 0.0
             for inst_idx in related_instances

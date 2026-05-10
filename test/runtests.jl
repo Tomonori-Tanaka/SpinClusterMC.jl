@@ -1,5 +1,6 @@
 using SpinClusterMC
 using SpinClusterMC.JPhiMagestyCarlo
+using Carlo
 using Test
 using Random
 using LinearAlgebra
@@ -310,6 +311,143 @@ end
 
                 # restore
                 JMCC._update_atom_zlm_cache!(zlm, atom, @view(spins[:, atom]), max_l)
+            end
+        end
+
+        @testset "tensor_template: build_local_energy_template counts" begin
+            # BaseClusterInstance count should equal the number of unique
+            # base-cell instances (translation-invariant, no tile enumeration).
+            # For repeat=(1,1,1) the template and full instance counts must be equal.
+            h1 = load_sce_hamiltonian(XML; repeat = (1, 1, 1))
+            h2 = load_sce_hamiltonian(XML; repeat = (2, 2, 2))
+
+            tpl1 = JMCC.build_local_energy_template(h1)
+            tpl2 = JMCC.build_local_energy_template(h2)
+
+            n_tpl1 = length(tpl1.base_instances) + length(tpl1.base_instances2)
+            n_tpl2 = length(tpl2.base_instances) + length(tpl2.base_instances2)
+
+            cache1 = JMCC.build_local_energy_cache(h1)
+            @test n_tpl1 == length(cache1.instances)
+            # For (2,2,2), the template has strictly fewer instances than the full cache.
+            cache2 = JMCC.build_local_energy_cache(h2)
+            @test n_tpl2 < length(cache2.instances)
+            # related_by_base_atom is indexed by base_n_atoms
+            @test length(tpl1.related_by_base_atom) == h1.base_n_atoms
+            @test length(tpl2.related_by_base_atom) == h2.base_n_atoms
+            @test length(tpl1.related2_by_base_atom) == h1.base_n_atoms
+            @test length(tpl2.related2_by_base_atom) == h2.base_n_atoms
+        end
+
+        @testset "tensor_template delta-energy matches tensor kernel" begin
+            # Flip one spin; local delta-E from tensor_template must match
+            # the same delta-E from the reference tensor kernel.
+            for rep in ((1, 1, 1), (2, 2, 2))
+                rng = MersenneTwister(99 + sum(rep))
+                h = load_sce_hamiltonian(XML; repeat = rep)
+                spins = rand_unit_spins(rng, h.n_atoms)
+
+                tpl = JMCC.build_local_energy_template(h)
+                cache = JMCC.build_local_energy_cache(h)
+                active_body_indices = collect(eachindex(cache.body_list))
+                related = JMCC._build_related_instances_by_atom(cache, active_body_indices, h.n_atoms)
+
+                max_l = JMCC._max_l_in_instances(cache.instances)
+                zlm = JMCC._build_zlm_cache(spins, max_l)
+
+                max_sites_general = maximum(length(inst.base_atoms) for inst in tpl.base_instances; init=1)
+                max_sites = isempty(tpl.base_instances2) ? max_sites_general : max(max_sites_general, 2)
+                buf_other = Vector{Int}(undef, max(max_sites, 1))
+                buf_cart  = Vector{Int}(undef, max(max_sites, 1))
+                atoms_buf = Vector{Int}(undef, max(max_sites, 1))
+
+                n1, n2, n3 = h.repeat
+                base_n = h.base_n_atoms
+
+                for atom in [1, 2, h.n_atoms]
+                    # Reference: tensor kernel local energy
+                    E_tensor = sum(
+                        cache.instances[idx].prefactor *
+                        JMCC._tensor_contract_instance_cached_changed!(
+                            buf_other, buf_cart, cache.instances[idx], zlm, atom,
+                        )
+                        for idx in related[atom];
+                        init = 0.0,
+                    )
+
+                    # Template kernel local energy
+                    b  = ((atom - 1) % base_n) + 1
+                    ti, tj, tk = JMCC._tile_coords(atom, base_n, h.repeat)
+                    E_tpl = 0.0
+                    for rc in tpl.related2_by_base_atom[b]
+                        inst2 = tpl.base_instances2[rc.inst_idx]
+                        pvd = inst2.tile_deltas[rc.pivot_k]
+                        pv1, pv2, pv3 = pvd[1], pvd[2], pvd[3]
+                        d1a = inst2.tile_deltas[1]; d2a = inst2.tile_deltas[2]
+                        a1 = supercell_atom_index(
+                            inst2.base_atoms[1],
+                            mod(ti + d1a[1] - pv1, n1),
+                            mod(tj + d1a[2] - pv2, n2),
+                            mod(tk + d1a[3] - pv3, n3),
+                            base_n, h.repeat,
+                        )
+                        a2 = supercell_atom_index(
+                            inst2.base_atoms[2],
+                            mod(ti + d2a[1] - pv1, n1),
+                            mod(tj + d2a[2] - pv2, n2),
+                            mod(tk + d2a[3] - pv3, n3),
+                            base_n, h.repeat,
+                        )
+                        E_tpl += inst2.prefactor * JMCC._tensor_contract_template2_changed!(
+                            inst2, a1, a2, zlm, atom,
+                        )
+                    end
+                    for rc in tpl.related_by_base_atom[b]
+                        inst = tpl.base_instances[rc.inst_idx]
+                        N = length(inst.base_atoms)
+                        pv1, pv2, pv3 = inst.tile_deltas[rc.pivot_k]
+                        for k in 1:N
+                            d1, d2, d3 = inst.tile_deltas[k]
+                            atoms_buf[k] = supercell_atom_index(
+                                inst.base_atoms[k],
+                                mod(ti + d1 - pv1, n1),
+                                mod(tj + d2 - pv2, n2),
+                                mod(tk + d3 - pv3, n3),
+                                base_n, h.repeat,
+                            )
+                        end
+                        E_tpl += inst.prefactor * JMCC._tensor_contract_template_changed!(
+                            buf_other, buf_cart, inst, atoms_buf, zlm, atom,
+                        )
+                    end
+
+                    @test E_tpl ≈ E_tensor rtol=1e-10
+                end
+            end
+        end
+
+        @testset "tensor_template Carlo.sweep! energy tracks tensor kernel" begin
+            # Run a few sweeps with tensor_template and verify the tracked energy
+            # agrees with the reference sce_energy after each sweep.
+            for rep in ((1, 1, 1), (2, 1, 1))
+                params = Dict(
+                    :xml_path      => XML,
+                    :repeat        => rep,
+                    :T             => 1.0,
+                    :thermalization => 0,
+                    :binsize       => 1,
+                    :seed          => 77,
+                    :energy_kernel => "tensor_template",
+                )
+                mc  = JPhiSpinMC(params)
+                ctx = Carlo.MCContext{MersenneTwister}(params)
+                Carlo.init!(mc, ctx, params)
+
+                for _ in 1:5
+                    Carlo.sweep!(mc, ctx)
+                    E_ref = sce_energy(mc.ham, mc.spins)
+                    @test mc.energy ≈ E_ref rtol=1e-8
+                end
             end
         end
 
