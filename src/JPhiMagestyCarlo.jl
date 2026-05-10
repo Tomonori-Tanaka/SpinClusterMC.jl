@@ -583,6 +583,43 @@ Evaluate one cluster tensor contraction for the provided translated atoms.
     return tensor_result
 end
 
+# Iterate over every unique translated cluster instance for `cbc` in the supercell
+# defined by `h`, calling `f(translated_atoms)` for each. Deduplication (by sorted
+# atom-index tuple) is handled here so callers don't repeat it.
+function _foreach_translated_instance(f, h::SCEHamiltonian, cbc)
+    n1, n2, n3 = h.repeat
+    n1f, n2f, n3f = Float64(n1), Float64(n2), Float64(n3)
+    N = length(cbc.atoms)
+    seen = Set{Tuple{Vector{Int}, Vector{Int}}}()
+    for tk in 0:(n3 - 1), tj in 0:(n2 - 1), ti in 0:(n1 - 1)
+        for t in 1:h.n_trans
+            translated_base = Int[h.map_sym[a, t] for a in cbc.atoms]
+            p_ref = h.pos_frac[:, translated_base[1]]
+            f_ref = (p_ref[1] * n1f, p_ref[2] * n2f, p_ref[3] * n3f)
+            translated_atoms = Vector{Int}(undef, N)
+            for (k, ba) in enumerate(translated_base)
+                p = h.pos_frac[:, ba]
+                w1 = round(Int, p[1] * n1f - f_ref[1])
+                w2 = round(Int, p[2] * n2f - f_ref[2])
+                w3 = round(Int, p[3] * n3f - f_ref[3])
+                translated_atoms[k] = supercell_atom_index(
+                    ba,
+                    mod(ti + w1, n1),
+                    mod(tj + w2, n2),
+                    mod(tk + w3, n3),
+                    h.base_n_atoms,
+                    h.repeat,
+                )
+            end
+            atoms_sorted = sort(translated_atoms)
+            pair = (atoms_sorted, cbc.ls)
+            pair in seen && continue
+            push!(seen, pair)
+            f(translated_atoms)
+        end
+    end
+end
+
 """
 Enumerate unique translated cluster instances and precompute metadata.
 """
@@ -592,68 +629,31 @@ function _build_cluster_instances(h::SCEHamiltonian)::Vector{ClusterInstance}
     # geometric translations of the same cbc would otherwise each get a separate
     # Vector allocation, multiplying memory by the number of translations.
     coeff_flat_cache = Dict{UInt, Vector{Float64}}()
-    n1, n2, n3 = h.repeat
-    n_trans = h.n_trans
 
     for (s, group) in enumerate(h.salc_list)
         js = h.jphi[s]
         for cbc in group
             scaling = _cluster_scaling(length(cbc.atoms))
-            searched_pairs = Set{Tuple{Vector{Int}, Vector{Int}}}()
-            for tk in 0:(n3 - 1)
-                for tj in 0:(n2 - 1)
-                    for ti in 0:(n1 - 1)
-                        for t in 1:n_trans
-                            translated_base = Int[h.map_sym[atom, t] for atom in cbc.atoms]
-                            # Each atom may belong to a different tile: compute tile offset
-                            # from the minimum-image wrapping vector relative to atom[1].
-                            # h.pos_frac[:,ba] stores supercell fractional positions (i.e.
-                            # base-cell frac / repeat). Multiply back by repeat to get base-cell
-                            # fractional coords before rounding to the wrapping integer.
-                            n1f, n2f, n3f = Float64(n1), Float64(n2), Float64(n3)
-                            p_ref = h.pos_frac[:, translated_base[1]]
-                            f_ref = (p_ref[1] * n1f, p_ref[2] * n2f, p_ref[3] * n3f)
-                            translated_atoms = Vector{Int}(undef, length(translated_base))
-                            for (k, ba) in enumerate(translated_base)
-                                p = h.pos_frac[:, ba]
-                                w1 = round(Int, p[1] * n1f - f_ref[1])
-                                w2 = round(Int, p[2] * n2f - f_ref[2])
-                                w3 = round(Int, p[3] * n3f - f_ref[3])
-                                translated_atoms[k] = supercell_atom_index(
-                                    ba,
-                                    mod(ti + w1, n1),
-                                    mod(tj + w2, n2),
-                                    mod(tk + w3, n3),
-                                    h.base_n_atoms,
-                                    h.repeat,
-                                )
-                            end
-                            atoms_sorted = sort(translated_atoms)
-                            pair = (atoms_sorted, cbc.ls)
-                            pair in searched_pairs && continue
-                            push!(searched_pairs, pair)
-                            inst_dims = [2 * l + 1 for l in cbc.ls]
-                            inst_strides = _compute_instance_strides(cbc.ls)
-                            N_cbc = length(cbc.atoms)
-                            inst_Mf_size = size(cbc.coeff_tensor, N_cbc + 1)
-                            inst_coeff_flat = get!(coeff_flat_cache, objectid(cbc)) do
-                                vec(collect(Float64, cbc.coeff_tensor))
-                            end
-                            push!(
-                                instances,
-                                ClusterInstance(
-                                    translated_atoms,
-                                    cbc,
-                                    js * cbc.multiplicity * scaling,
-                                    inst_dims,
-                                    inst_strides,
-                                    inst_coeff_flat,
-                                    inst_Mf_size,
-                                ),
-                            )
-                        end
-                    end
-                end
+            N_cbc = length(cbc.atoms)
+            inst_dims = [2 * l + 1 for l in cbc.ls]
+            inst_strides = _compute_instance_strides(cbc.ls)
+            inst_Mf_size = size(cbc.coeff_tensor, N_cbc + 1)
+            inst_coeff_flat = get!(coeff_flat_cache, objectid(cbc)) do
+                vec(collect(Float64, cbc.coeff_tensor))
+            end
+            _foreach_translated_instance(h, cbc) do translated_atoms
+                push!(
+                    instances,
+                    ClusterInstance(
+                        translated_atoms,
+                        cbc,
+                        js * cbc.multiplicity * scaling,
+                        inst_dims,
+                        inst_strides,
+                        inst_coeff_flat,
+                        inst_Mf_size,
+                    ),
+                )
             end
         end
     end
@@ -864,9 +864,6 @@ function build_monomial_table(
 )::Tuple{MonomialTable, Vector{Vector{Int}}}
     active_set = active_bodies === nothing ? nothing : Set{Int}(active_bodies)
     acc = Dict{Tuple{Vector{Int}, Vector{Int}, Vector{Int}}, Float64}()
-    n1, n2, n3 = h.repeat
-    n_trans = h.n_trans
-    n1f, n2f, n3f = Float64(n1), Float64(n2), Float64(n3)
 
     for (s, group) in enumerate(h.salc_list)
         js = h.jphi[s]
@@ -877,51 +874,25 @@ function build_monomial_table(
             base_prefactor = js * cbc.multiplicity * scaling
             dims = ntuple(k -> 2 * cbc.ls[k] + 1, N)
             Mf_size = size(cbc.coeff_tensor, N + 1)
-            seen = Set{Tuple{Vector{Int}, Vector{Int}}}()
 
-            for tk in 0:(n3 - 1), tj in 0:(n2 - 1), ti in 0:(n1 - 1)
-                for t in 1:n_trans
-                    translated_base = Int[h.map_sym[a, t] for a in cbc.atoms]
-                    p_ref = h.pos_frac[:, translated_base[1]]
-                    f_ref = (p_ref[1] * n1f, p_ref[2] * n2f, p_ref[3] * n3f)
-                    translated_atoms = Vector{Int}(undef, N)
-                    for (k, ba) in enumerate(translated_base)
-                        p = h.pos_frac[:, ba]
-                        w1 = round(Int, p[1] * n1f - f_ref[1])
-                        w2 = round(Int, p[2] * n2f - f_ref[2])
-                        w3 = round(Int, p[3] * n3f - f_ref[3])
-                        translated_atoms[k] = supercell_atom_index(
-                            ba,
-                            mod(ti + w1, n1),
-                            mod(tj + w2, n2),
-                            mod(tk + w3, n3),
-                            h.base_n_atoms,
-                            h.repeat,
-                        )
-                    end
-                    atoms_sorted = sort(translated_atoms)
-                    pair = (atoms_sorted, cbc.ls)
-                    pair in seen && continue
-                    push!(seen, pair)
+            _foreach_translated_instance(h, cbc) do translated_atoms
+                perm = sortperm(translated_atoms)
+                ls_perm = cbc.ls[perm]
+                atoms_perm = translated_atoms[perm]
 
-                    perm = sortperm(translated_atoms)
-                    ls_perm = cbc.ls[perm]
-                    atoms_perm = translated_atoms[perm]
-
-                    for mf_idx in 1:Mf_size
-                        c_mf = cbc.coefficient[mf_idx]
-                        c_mf == 0.0 && continue
-                        for m_tuple in CartesianIndices(dims)
-                            T = cbc.coeff_tensor[m_tuple.I..., mf_idx]
-                            T == 0.0 && continue
-                            coeff = base_prefactor * c_mf * T
-                            m_perm = Vector{Int}(undef, N)
-                            @inbounds for k in 1:N
-                                m_perm[k] = m_tuple.I[perm[k]]
-                            end
-                            key = (atoms_perm, ls_perm, m_perm)
-                            acc[key] = get(acc, key, 0.0) + coeff
+                for mf_idx in 1:Mf_size
+                    c_mf = cbc.coefficient[mf_idx]
+                    c_mf == 0.0 && continue
+                    for m_tuple in CartesianIndices(dims)
+                        T = cbc.coeff_tensor[m_tuple.I..., mf_idx]
+                        T == 0.0 && continue
+                        coeff = base_prefactor * c_mf * T
+                        m_perm = Vector{Int}(undef, N)
+                        @inbounds for k in 1:N
+                            m_perm[k] = m_tuple.I[perm[k]]
                         end
+                        key = (atoms_perm, ls_perm, m_perm)
+                        acc[key] = get(acc, key, 0.0) + coeff
                     end
                 end
             end

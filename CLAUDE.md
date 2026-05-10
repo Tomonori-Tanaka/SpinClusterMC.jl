@@ -43,13 +43,12 @@
 
 ## 連動箇所（一方を変えたら全箇所を確認）
 
-### タイリングロジック（3箇所同期必須）
-スーパーセルのタイル座標→原子インデックス変換が以下の3箇所に独立して実装されている：
-- `_build_cluster_instances` — fast path用クラスターインスタンス構築
-- `build_monomial_table` — monomial kernel用テーブル構築
-- `coupled_cluster_energy` — リファレンスpath
+### タイリングロジック
+タイル座標→原子インデックス変換のコアは `_foreach_translated_instance` に集約されている。
+`_build_cluster_instances` と `build_monomial_table` はこのヘルパーを使う。
 
-どれか1つを変えたら残り2つも必ず同期すること。
+`coupled_cluster_energy`（リファレンスpath）は独立した実装を持つ。タイリングロジックを
+変更する場合は `_foreach_translated_instance` と `coupled_cluster_energy` の2箇所を同期すること。
 
 ### エネルギーカーネルの2パス整合性
 `:tensor` と `:monomial` は別コードパスだが数値結果は一致しなければならない。
