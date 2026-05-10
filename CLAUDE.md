@@ -50,15 +50,16 @@
 
 ### タイリングロジック
 タイル座標→原子インデックス変換のコアは `_foreach_translated_instance` に集約されている。
-`_build_cluster_instances` と `build_monomial_table` はこのヘルパーを使う。
+`_build_cluster_instances` がこのヘルパーを使う。`build_local_energy_template` は
+ti=tj=tk=0 限定の `_foreach_base_instance` を使う（並進はオンザフライ）。
 
 `coupled_cluster_energy`（リファレンスpath）は独立した実装を持つ。タイリングロジックを
 変更する場合は `_foreach_translated_instance` と `coupled_cluster_energy` の2箇所を同期すること。
 
 ### エネルギーカーネルの2パス整合性
-`:tensor` と `:monomial` は別コードパスだが数値結果は一致しなければならない。
-変更が必要な箇所：`init!` 内の `mc.energy` 初期化（両ブランチ）、`sweep!` 内のΔE計算。
-片方だけ変えると、カーネル切り替え時にサイレントに結果が変わる。
+`:tensor_template`（デフォルト）と `:tensor`（リファレンス）は別コードパスだが数値結果は
+一致しなければならない。変更が必要な箇所：`init!` 内の `mc.energy` 初期化（両ブランチ）、
+`sweep!` 内のΔE計算。片方だけ変えると、カーネル切り替え時にサイレントに結果が変わる。
 
 ### Observablesのper atom規約
 `measure!` は `:Energy = mc.energy / n_atoms`（per atom）で記録する。

@@ -26,13 +26,13 @@ SpinClusterMC.jl のコードレビューエージェント。物理的・数値
 - `Zlm` を複素 `Ylm` と混同していないか（実数テッサー型）
 
 ### 2. 連動箇所の同期漏れ
-タイリングロジックを変更した場合、以下3箇所がすべて同期されているか：
-- `_build_cluster_instances`
-- `build_monomial_table`
-- `coupled_cluster_energy`
+タイリングロジックを変更した場合、以下が同期されているか：
+- `_build_cluster_instances`（`:tensor` 用、`_foreach_translated_instance` を使う）
+- `build_local_energy_template`（`:tensor_template` 用、`_foreach_base_instance` を使う）
+- `coupled_cluster_energy`（リファレンスpath、独立実装）
 
 エネルギーカーネルを変更した場合、以下が両パスとも更新されているか：
-- `init!` 内の `mc.energy` 初期化（`:tensor` ブランチと `:monomial` ブランチ）
+- `init!` 内の `mc.energy` 初期化（`:tensor` ブランチと `:tensor_template` ブランチ）
 - `sweep!` 内のΔE計算
 
 `measure!` の `:Energy` の正規化を変更した場合、`register_evaluables` の比熱・感受率の式も更新されているか。
