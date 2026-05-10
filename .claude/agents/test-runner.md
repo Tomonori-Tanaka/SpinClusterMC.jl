@@ -30,7 +30,7 @@ SpinClusterMC.jl のテストランナーエージェント。テストを実行
 | `_min_image_frac` | 最小イメージ規約（周期境界） | フラクショナル座標の折り返し処理 |
 | `spin proposals` | スピン提案の単位ベクトル性・角度範囲 | `_rand_unit_spin`、ジオデシック提案 |
 | `sce_energy reference vs fast` | `sce_energy`（リファレンス）と`_energy_from_instances`（高速パス）の一致 | エネルギー計算の両パスの整合性 |
-| `monomial kernel matches SALC kernel` | tensor kernelとmonomial kernelの数値一致 | `build_monomial_table`、`_monomial_total_energy` |
+| `tensor_template delta-energy matches tensor kernel` | `:tensor_template` と `:tensor` の局所ΔE一致 | `_template_local_energy!`、N=2/N=3 SVector kernel |
 | `delta energy consistency` | 局所ΔEと全エネルギー差の一致 | `_tensor_contract_instance_cached_changed!`、関連インスタンスの列挙 |
 | `supercell interaction energy scales linearly` | 強磁性配置でエネルギーがスーパーセル体積に比例 | タイリングロジック（3箇所同期） |
 | `bcc_2x2x2 ferromagnetic energy` | 強磁性基底状態エネルギーの物理値との一致 `-(2+√3) eV/atom` | `sce_energy`の絶対値、XMLの読み込み |
@@ -51,7 +51,7 @@ SpinClusterMC.jl のテストランナーエージェント。テストを実行
 - **`supercell interaction energy scales linearly` の失敗**: タイリング時にクロスタイル相互作用が正しく計算されていない（かつてのバグと同種）。
 - **`bcc_2x2x2 ferromagnetic energy` の失敗**: 絶対エネルギーの数値が物理値と一致しない。XMLの読み込みや単位規約に問題がある可能性。
 - **`Metropolis checkpoint restart` の失敗**: 再現性が壊れている。RNGのシリアライズかMCの状態管理に問題。
-- **`monomial kernel matches SALC kernel` の失敗**: monomialカーネルとtensorカーネルが乖離。`build_monomial_table`の展開ロジックに問題。
+- **`tensor_template delta-energy matches tensor kernel` の失敗**: テンプレートカーネルとリファレンス `:tensor` カーネルが乖離。`_template_local_energy!` のタイル座標再構成や N=2/N=3 SVector カーネルに問題。
 
 ## 報告フォーマット
 

@@ -137,6 +137,54 @@ mc.propose::Function  # (rng, sx, sy, sz) -> (sx', sy', sz')
 
 ---
 
+## StaticArrays による高速化（保留中）
+
+### 背景
+
+`_tensor_contract_template_changed!` が `sweep!` の支配的コストであり、
+その内側ループで `inst.dims`, `inst.strides`, `inst.base_atoms`, `inst.tile_deltas`
+を繰り返し参照している。これらはすべてヒープ上の `Vector` であり、要素数は N=2〜5 程度と小さい。
+
+### 候補1：`BaseClusterInstance` を本体数 N でパラメトリック化（最優先）
+
+`dims::Vector{Int}` / `strides::Vector{Int}` / `base_atoms::Vector{Int}` /
+`tile_deltas::Vector{NTuple{3,Int}}` を `SVector{N,…}` にする。
+
+効果：
+- `for k in 1:N` ループがコンパイル時にアンロールされる（N=2の2体項が大多数の系で大きい）
+- これら小配列がスタックに乗る（ヒープ参照のオーバーヘッド消滅）
+- `@inbounds` なしでも境界チェックが消える
+
+**実装上の問題点**：`BaseClusterInstance{N}` は型パラメータを持つため、
+`Vector{BaseClusterInstance}` が抽象型のコンテナになり型不安定になる。
+対策：
+- `Union{BaseClusterInstance{2}, BaseClusterInstance{3}, BaseClusterInstance{4}, BaseClusterInstance{5}}`
+  で dispatch する（N≤5 で場合分け）
+- あるいは N=2 のみ特殊化し、残りは現状維持
+
+### 候補2：`spins` のレイアウト変更（変更範囲が広い）
+
+現在 `spins::Matrix{Float64}`（3×n_atoms）。列アクセスが `@view(mc.spins[:, atom])` でヒープ参照。
+`Vector{SVector{3,Float64}}` に変えると `mc.spins[atom]` がスタック値になり、
+zlm 計算の x/y/z バラシコストが消える。
+
+**トレードオフ**：`sce_energy`, `_tile_base_spins!`, `coupled_cluster_energy` など
+`spins` を受け取るすべての関数の型注釈を変える必要がある。変更範囲が広く、
+候補1より優先度は低い。
+
+### 候補3：`zlm_row_buf` を `MVector` に（効果は小さい）
+
+`zlm_row_buf::Vector{Float64}`（サイズ `(l_max+1)^2`、l_max=2 なら 9 要素）は
+毎スピン提案ごとに書いて読む。`MVector{K,Float64}` にするとスタックに乗るが、
+サイズが実行時パラメータのためパラメトリック型が必要。効果は小さいと見込まれる。
+
+### 実装方針
+
+候補1 → 候補2 の順で検討する。
+実装前に `profiler` エージェントでボトルネックを確認し、変更前後でベンチマークを比較すること。
+
+---
+
 ## ClusterInstance のテンプレート化（保留中）
 
 > 用語の定義は [`docs/terminology.md`](terminology.md) を参照。

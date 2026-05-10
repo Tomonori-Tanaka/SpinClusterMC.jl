@@ -42,23 +42,24 @@
 ## 設計判断
 
 ### j0（定数エネルギー項）
-`sce_energy`、`monomial_sce_energy`、`mc.energy` はいずれも `j0` を含まない。
+`jphi.xml` の `ReferenceEnergy`（`j0`）は読み込まない。
 理由：本パッケージはMCサンプリング専用であり、`ΔE` のみが重要なため定数項は不要。
-絶対エネルギーが必要な場合は呼び出し側で `h.j0 * prod(h.repeat)` を加算すること。
+絶対エネルギーが必要な呼び出し側は XML から直接 `ReferenceEnergy` を読むこと。
 
 ## 連動箇所（一方を変えたら全箇所を確認）
 
 ### タイリングロジック
 タイル座標→原子インデックス変換のコアは `_foreach_translated_instance` に集約されている。
-`_build_cluster_instances` と `build_monomial_table` はこのヘルパーを使う。
+`_build_cluster_instances` がこのヘルパーを使う。`build_local_energy_template` は
+ti=tj=tk=0 限定の `_foreach_base_instance` を使う（並進はオンザフライ）。
 
 `coupled_cluster_energy`（リファレンスpath）は独立した実装を持つ。タイリングロジックを
 変更する場合は `_foreach_translated_instance` と `coupled_cluster_energy` の2箇所を同期すること。
 
 ### エネルギーカーネルの2パス整合性
-`:tensor` と `:monomial` は別コードパスだが数値結果は一致しなければならない。
-変更が必要な箇所：`init!` 内の `mc.energy` 初期化（両ブランチ）、`sweep!` 内のΔE計算。
-片方だけ変えると、カーネル切り替え時にサイレントに結果が変わる。
+`:tensor_template`（デフォルト）と `:tensor`（リファレンス）は別コードパスだが数値結果は
+一致しなければならない。変更が必要な箇所：`init!` 内の `mc.energy` 初期化（両ブランチ）、
+`sweep!` 内のΔE計算。片方だけ変えると、カーネル切り替え時にサイレントに結果が変わる。
 
 ### Observablesのper atom規約
 `measure!` は `:Energy = mc.energy / n_atoms`（per atom）で記録する。

@@ -162,7 +162,7 @@ function main()
     )
     mc = JPhiSpinMC(params)
     mc.spins .= spins
-    mc.energy = h.j0 + JMCC._energy_from_instances(cache.instances, spins)
+    mc.energy = JMCC._energy_from_instances(cache.instances, spins)
 
     # warm up
     buf = IOBuffer()

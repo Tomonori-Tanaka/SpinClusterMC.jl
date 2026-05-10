@@ -8,6 +8,7 @@ using Test
 using Logging
 using Random
 using Statistics
+using StaticArrays
 
 const XML_2x2x2 = joinpath(@__DIR__, "jphi.xml")
 
@@ -81,11 +82,11 @@ end
         ctx = Carlo.MCContext{MersenneTwister}(params)
         Carlo.init!(mc, ctx, params)
 
-        @test size(mc.spins) == (3, expected_n)
+        @test length(mc.spins) == expected_n
         # Every supercell spin must equal the tiled base-cell spin (unit +z)
-        @test all(mc.spins[1, :] .≈ 0.0)
-        @test all(mc.spins[2, :] .≈ 0.0)
-        @test all(mc.spins[3, :] .≈ 1.0)
+        @test all(s -> s[1] ≈ 0.0, mc.spins)
+        @test all(s -> s[2] ≈ 0.0, mc.spins)
+        @test all(s -> s[3] ≈ 1.0, mc.spins)
     end
 
     @testset "non-uniform base cell is tiled periodically" begin
@@ -112,7 +113,7 @@ end
         @test n == 2 * base_n
         for ia in 1:n
             ib = ((ia - 1) % base_n) + 1   # expected base atom
-            @test mc.spins[:, ia] ≈ init_spins[:, ib]
+            @test collect(mc.spins[ia]) ≈ init_spins[:, ib]
         end
     end
 
@@ -149,8 +150,7 @@ end
     mc = JPhiSpinMC(params)
 
     # Set ferromagnetic spin configuration: all spins along +z
-    mc.spins .= 0.0
-    mc.spins[3, :] .= 1.0
+    fill!(mc.spins, SVector(0.0, 0.0, 1.0))
 
     # Measure once without any sweep (Carlo.measure! reads mc.spins directly)
     ctx = Carlo.MCContext{MersenneTwister}(params)
@@ -182,8 +182,7 @@ end
     mc  = JPhiSpinMC(params)
 
     # Start from the ferromagnetic ground state (all spins along +z)
-    mc.spins .= 0.0
-    mc.spins[3, :] .= 1.0
+    fill!(mc.spins, SVector(0.0, 0.0, 1.0))
     JMCC._rebuild_zlm_cache!(mc)
     mc.energy = JMCC._energy_from_instances(
         mc.local_cache.instances[mc.active_instance_indices], mc.spins,
