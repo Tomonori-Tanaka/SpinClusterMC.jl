@@ -15,5 +15,6 @@ JuliaLocalPreferences.toml
 *.code-workspace
 .vscode/
 .claude/*
+!.claude/agents/
 
 .DS_Store
