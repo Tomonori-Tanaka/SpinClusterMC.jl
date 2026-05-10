@@ -244,7 +244,7 @@ function _mpi_build_ham_and_cache(
     rep::NTuple{3, Int},
 )::Tuple{SCEHamiltonian, LocalEnergyCache}
     key = (xml_path, rep)
-    if haskey(_HAM_CACHE, key)
+    if haskey(_HAM_CACHE, key) && haskey(_ECACHE_CACHE, key)
         return _HAM_CACHE[key], _ECACHE_CACHE[key]
     end
     # Each MPI rank builds its own copy in parallel.  Broadcasting via
@@ -254,9 +254,13 @@ function _mpi_build_ham_and_cache(
     # requires a second copy on every rank.  The process-local cache below
     # only prevents redundant rebuilds *within the same process* (e.g. from
     # Carlo.register_evaluables calling load_sce_hamiltonian a second time).
-    ham   = load_sce_hamiltonian(xml_path; repeat = rep)
+    # `_HAM_CACHE` may already be populated by the :tensor_template path
+    # (which doesn't build the full LocalEnergyCache), so reuse the ham
+    # in that case and only build the missing cache.
+    ham = get!(_HAM_CACHE, key) do
+        load_sce_hamiltonian(xml_path; repeat = rep)
+    end
     cache = build_local_energy_cache(ham)
-    _HAM_CACHE[key]    = ham
     _ECACHE_CACHE[key] = cache
     return ham, cache
 end
@@ -702,7 +706,7 @@ Carlo.start(Carlo.SingleScheduler, job)
 ## Energy kernel
 | Key | Type | Default | Description |
 |:----|:-----|:--------|:------------|
-| `:energy_kernel` | `Symbol` | `:tensor` | `:tensor` uses the SALC tensor-contraction kernel (CG tensors evaluated on every energy call). `:monomial` pre-expands every SALC into a sum of scalar monomials in real spherical harmonics — coefficients of identical `(atom, l, m)` factor lists are merged across SALCs and translations at build time, eliminating the inner CG-tensor contraction from the hot path. The two kernels agree to within floating-point summation order; see [`MonomialTable`](@ref) and [`build_monomial_table`](@ref). |
+| `:energy_kernel` | `Symbol` | `:tensor_template` | `:tensor_template` (default) stores only base-cell cluster instances and reconstructs supercell atom indices on-the-fly during `sweep!`, giving O(n_base_instances) memory regardless of supercell size. N=2 / N=3 instances use SVector-specialized contraction kernels. `:tensor` enumerates every translated instance up front — uses more memory but has slightly different SIMD behavior. `:monomial` pre-expands every SALC into a sum of scalar monomials in real spherical harmonics, merging coefficients of identical `(atom, l, m)` factor lists across SALCs and translations at build time; this is the fastest kernel for systems where the monomial table fits in memory, but build memory scales with supercell size and can OOM on large repeats. All three kernels agree to within floating-point summation order. See [`MonomialTable`](@ref), [`build_monomial_table`](@ref), [`build_local_energy_template`](@ref). |
 
 ## Carlo scheduler
 | Key | Type | Description |
@@ -760,8 +764,10 @@ mutable struct JPhiSpinMC <: AbstractMC
     xml_path::String
     repeat::NTuple{3,Int}
     enabled_bodies::Union{Nothing,Vector{Int}}
-    # `:tensor` (default) uses the SALC tensor-contraction kernel via
-    # `_energy_from_instances_cached` / `_tensor_contract_instance_cached_changed!`.
+    # `:tensor_template` (default) uses base-cell cluster templates with on-the-fly
+    # supercell index reconstruction (`_template_local_energy!`); SVector-specialized
+    # for N=2 / N=3 clusters. `:tensor` uses the fully-enumerated SALC tensor-contraction
+    # kernel via `_energy_from_instances_cached` / `_tensor_contract_instance_cached_changed!`.
     # `:monomial` uses the pre-summed scalar-monomial kernel
     # (`_monomial_total_energy` / `_monomial_local_energy`); see `MonomialTable`.
     energy_kernel::Symbol
@@ -818,7 +824,7 @@ function JPhiSpinMC(params::AbstractDict)
             throw(ArgumentError("energy_kernel must be :tensor, :monomial, or :tensor_template, got $sym"))
         sym
     else
-        :tensor
+        :tensor_template
     end
     spin_theta_max = if haskey(params, :spin_theta_max)
         θ = Float64(params[:spin_theta_max])
@@ -856,6 +862,10 @@ function JPhiSpinMC(params::AbstractDict)
         zlm_row_buf     = Vector{Float64}(undef, (max_l + 1)^2)
         other_sites_buf = Vector{Int}(undef, max(max_sites, 1))
         cart_idx_buf    = Vector{Int}(undef, max(max_sites, 1))
+        # Build the template eagerly so mc is usable without Carlo.init!
+        # (e.g. tests that set spins/energy manually and call sweep! directly).
+        local_template = build_local_energy_template(ham)
+        atoms_buf = Vector{Int}(undef, max(max_sites, 1))
         return JPhiSpinMC(
             T, ham, zeros(3, n), 0.0,
             stub_cache,
@@ -865,7 +875,7 @@ function JPhiSpinMC(params::AbstractDict)
             spin_theta_max, renorm_every, 0,
             xml, rep, enabled_bodies, energy_kernel,
             nothing, [Int[] for _ in 1:n],
-            nothing, Int[],
+            local_template, atoms_buf,
         )
     end
 

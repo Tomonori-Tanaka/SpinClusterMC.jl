@@ -485,6 +485,31 @@ end
             end
         end
 
+        @testset "explicit :tensor kernel Carlo.sweep! energy tracks reference" begin
+            # :tensor is no longer the default; keep explicit coverage so the path
+            # doesn't rot. Mirrors the :tensor_template testset above.
+            for rep in ((1, 1, 1), (2, 1, 1))
+                params = Dict(
+                    :xml_path      => XML,
+                    :repeat        => rep,
+                    :T             => 1.0,
+                    :thermalization => 0,
+                    :binsize       => 1,
+                    :seed          => 77,
+                    :energy_kernel => "tensor",
+                )
+                mc  = JPhiSpinMC(params)
+                ctx = Carlo.MCContext{MersenneTwister}(params)
+                Carlo.init!(mc, ctx, params)
+
+                for _ in 1:5
+                    Carlo.sweep!(mc, ctx)
+                    E_ref = sce_energy(mc.ham, mc.spins)
+                    @test mc.energy ≈ E_ref rtol=1e-8
+                end
+            end
+        end
+
         @testset "supercell interaction energy scales linearly" begin
             # Ferromagnetic config (all spins identical).
             # (2,1,1) tiling produces exactly 2× the cluster instances,
