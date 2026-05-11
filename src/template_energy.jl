@@ -208,9 +208,14 @@ end
 
 # Precompute SAIs for one fixed cluster size N (2 or 3). For each supercell atom `i`,
 # for each `rc` in `related_by_base_atom[base_of(i)]`, store the N supercell-atom
-# indices of the cluster sites packed in `sai_flat`. `sai_offsets[i] .. sai_offsets[i+1]-1`
-# is the slice for atom `i`; within it, `rc_local_idx`'s SAIs occupy `N` consecutive
-# slots (k=1..N). `base_instances_n` provides `base_atoms` and `tile_deltas`.
+# indices of the cluster sites packed in `flat`.
+#
+# Indexing (all 1-based, Julia convention):
+#   slice for atom `i` is `flat[offsets[i] : offsets[i+1] - 1]` (length = N * len(related[b]))
+#   within that slice, `rc_idx`'s SAIs are at positions `N*(rc_idx-1) + 1 .. N*rc_idx`
+#   the readers in `_template_local_energy!` use `base_off = offsets[i] - 1` and
+#   `flat[base_off + N*(rc_idx-1) + k]`, which is equivalent.
+# `base_instances_n` provides `base_atoms` and `tile_deltas`.
 function _build_sai_table_n(
     related_by_base_atom::Vector{Vector{RelatedBaseCluster}},
     base_instances_n,
