@@ -142,57 +142,64 @@ field type を確定させる。あるいは Carlo アダプタ分離と同時�
 `profiler` エージェントで `:tensor_template` パスを計測。条件：max_l=1、N=2 base instances=88、
 T=0.02585 eV、spin_theta_max=0.5。
 
-### Before / After 比較（3 段階）
+### Before / After 比較（4 段階）
 
 | 段階 | 内容 |
 |---|---|
 | Before | 何も手を入れていない時点 |
-| 中間 | (1) `related_instances = Int[]` 削除 (2) Magesty buffered `Zₗₘ_unsafe(l, m, u, buf)` 採用 |
-| After | (3) SpheriCart.jl 採用（parametric `JPhiSpinMC{S<:SphericalHarmonics}`）— bit-exact 一致を確認の上 |
+| 中間1 | (1) `related_instances = Int[]` 削除 (2) Magesty buffered `Zₗₘ_unsafe(l, m, u, buf)` 採用 |
+| 中間2 | (3) SpheriCart.jl 採用（parametric `JPhiSpinMC{S<:SphericalHarmonics}`）— bit-exact 一致を確認の上 |
+| After | (4) SAI フラットテーブル化（候補F (b)）— N=2/N=3 ホットパスの `supercell_atom_index` + `_tile_coords` を `tpl.sai{2,3}_flat` lookup に置換 |
 
-| 指標 | Before | 中間 | After (SpheriCart) | 累積変化 |
-|---|---|---|---|---|
-| sweep（`:tensor_template`, GC 除く） | 57.9 μs | 51.1 μs | **45.2 μs** | **1.28×** |
-| allocs/sweep | 1152 | 0 | **0** | 完全消失 |
-| memory/sweep | 38.9 KB | 0 B | **0 B** | 完全消失 |
-| `_update_atom_zlm_cache!` per call | ~66.7 ns | 37.5 ns | **2.0 ns** | **33×** |
-| `_update_atom_zlm_cache!` 寄与 | 43% | 9% | **<0.5%** | 実質ボトルネックから外れた |
+| 指標 | Before | 中間1 | 中間2 (SpheriCart) | After (SAI table) | 累積変化 |
+|---|---|---|---|---|---|
+| sweep（`:tensor_template`, GC 除く） | 57.9 μs | 51.1 μs | 45.2 μs | **26.0 μs** | **2.23×** |
+| allocs/sweep | 1152 | 0 | 0 | **0** | 完全消失 |
+| memory/sweep | 38.9 KB | 0 B | 0 B | **0 B** | 完全消失 |
+| `_update_atom_zlm_cache!` per call | ~66.7 ns | 37.5 ns | 2.0 ns | **2.5 ns** | **27×** |
+| SAI + `_tile_coords` 寄与 | 28% | 28% | 41.5% | **~1.3%** | 実質除去 |
+| Zlm 寄与 | 43% | 9% | 0.8% | **1.2%** | 実質除去 |
 
-### After の sweep 内訳（45.2 μs/sweep, allocs 0, GC 0）
+### After の sweep 内訳（26.0 μs/sweep, allocs 0, GC 0, 2026-05-11）
 
-| 処理 | 推定割合 |
-|---|---|
-| `_tensor_contract_template2_changed!`（テンソル収縮） | ~50%（最大） |
-| `supercell_atom_index`（mod + 乗算） | ~30% |
-| `_update_atom_zlm_cache!` | <0.5% |
-| ループ・分岐・tile_coords 等の残差 | ~13% |
-| `_propose_spin_geodesic`、その他 | 残り |
+| 処理 | μs/sweep | % total |
+|---|---|---|
+| `_template_local_energy!` 全体（2 パス、ループオーバヘッド含む） | **17.1** | **65.6%** |
+| &emsp;└ `_tensor_contract_template2_changed!`（収縮、推定 6.7 ns × 11 × 128 × 2） | ~18.8 | 〜支配 |
+| &emsp;└ SAI テーブル lookup（read-only） | 0.34 | 1.3% |
+| `_propose_spin_geodesic` | 0.96 | 3.7% |
+| Metropolis（`exp` + `rand`） | 0.99 | 3.8% |
+| `_update_atom_zlm_cache!`（SpheriCart Zlm） | 0.32 | 1.2% |
+| `zlm_row_buf` save+restore | 0.27 | 1.0% |
+| 残差（loop/rng/分岐予測など） | ~6.4 | 24.6% |
 
 ### 残る主要ボトルネックと候補との対応
 
-- **収縮カーネル `_tensor_contract_template2_changed!`** ← 候補 A・B が対応（最大ボトルネック）
-- **`supercell_atom_index` の mod + 乗算** ← 候補 F が対応（下記）
+- **収縮カーネル `_tensor_contract_template2_changed!`**（推定 ~18.8 μs, 主要） ← 候補 A（zlm_cache 転置）と候補 B（coeff_flat stride dispatch）が対応
+- **残差** ~6.4 μs（loop/rng/分岐）— 現状の sweep 構造で削るには Metropolis の内側ループそのものを見直す必要
 
 完了済み：
-- 候補 E（`Zₗₘ_unsafe` のバッファ事前確保, Magesty buffered API）
+- 候補 E: Magesty buffered `Zₗₘ_unsafe` 採用
 - SpheriCart 採用（Zlm hot path 実質除去）
+- 候補 F (b): SAI フラットテーブル化（SAI hot path 実質除去）— 想定 1.1〜1.2× を上回り **1.74×** 改善
 
 ---
 
-## 候補F：`supercell_atom_index` の mod 削減（新規, 28%, 数値不変）
+## 候補F：完了（2026-05-11, 1.74× sweep 改善）
 
-**現状**: `_template_local_energy!` 内で 1 sweep あたり 5632 回 `supercell_atom_index(base_atom,
-ti, tj, tk, base_n_atoms, repeat)` を呼び、その都度 `mod` と乗算でスーパーセル原子インデックスを
-計算している。bcc_2x2x2 + 2x2x2 タイリング系では 14.1 μs/sweep（28%）を占める。
+**実装**: `LocalEnergyTemplate` に `sai2_flat::Vector{Int}` + `sai2_offsets::Vector{Int}` と
+N=3 用ペアを追加。`build_local_energy_template` 末尾の `_build_sai_table_n` ヘルパーで、
+全 `(i, rc, k)` の組み合わせを 1 度だけ計算してフラット配列に詰める。
+`_template_local_energy!` の N=2 と N=3 ループ内の `_tile_coords` + `supercell_atom_index` を
+`sai{2,3}_flat[sai{2,3}_offsets[i] + N*(rc_idx-1) + k - 1]` 1 命令の lookup に置換。
 
-**提案**:
-- (a) `repeat` を `Val{rep}` として伝搬し、`mod` をコンパイル時定数化する。`repeat` のバリエー
-  ションは少数（典型は (2,2,2) や (4,4,4) など固定）なので、一般化と特殊化のバランスを取りやすい。
-- (b) タイル座標 (ti,tj,tk) のループ自体を `_template_local_energy!` の外側に持ち上げ、
-  事前計算したインデックステーブル（`Vector{Int}` of length `n_atoms × max_sites`）を引くだけに
-  する。メモリは増えるが mod が消える。
+**測定結果**: SAI + `_tile_coords` が 19.6 μs → ~0.34 μs（57× 高速化）。
+sweep 全体は 45.2 μs → 26.0 μs（**1.74×**）。想定 1.1〜1.2× を上回ったのは、SAI 除去だけでなく
+`_tile_coords` 呼びとそれに付随する `rc.pivot_k` 分岐や中間変数アクセスも一緒に消えたため。
 
-**期待効果**: 14.1 μs → 数 μs（推定 sweep 全体 1.1〜1.2× 改善）
-**実装規模**: 中。`_template_local_energy!` 周辺と関連ヘルパーの変更が必要。
-**注意**: 数値結果は不変であるべきだが、インデックステーブル方式 (b) はタイリング規約と
-密結合になるため `_foreach_translated_instance` との連動確認が必要（CLAUDE.md「連動箇所」）。
+**N≥4 path**: 事前計算テーブルなし、on-the-fly のまま。現行 2 つのテスト問題
+（bcc_2x2x2, ferh_4x4x4）はどちらも N≥4 インスタンス 0 なので影響なし。`_tile_coords` 呼びは
+`related_other` が空のとき skip する分岐を入れて 0 コストにした。
+
+**メモリコスト**: bcc_2x2x2 で 22 KB、ferh_4x4x4 で約 60 MB（N=3 が 832K あり）。後者は
+ベンチでは未測定だが、許容範囲のはず（test 用途ならむしろ問題なし）。

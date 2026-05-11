@@ -929,96 +929,73 @@ include("spin_utils.jl")
 @inline function _template_local_energy!(mc::JPhiSpinMC, i::Int)::Float64
     tpl = mc.local_template::LocalEnergyTemplate
     rep = mc.ham.repeat
-    n1, n2, n3 = rep
     base_n = mc.ham.base_n_atoms
     b = ((i - 1) % base_n) + 1
-    ti, tj, tk = _tile_coords(i, base_n, rep)
     e = 0.0
 
-    # N=2 fast path: SVector fields, no buffers needed.
-    @inbounds for rc in tpl.related2_by_base_atom[b]
+    # N=2 fast path: SAIs precomputed in tpl.sai2_flat (no mod / no _tile_coords).
+    related2 = tpl.related2_by_base_atom[b]
+    sai2 = tpl.sai2_flat
+    sai2_off = tpl.sai2_offsets[i] - 1
+    @inbounds for rc_idx in 1:length(related2)
+        rc = related2[rc_idx]
         inst2 = tpl.base_instances2[rc.inst_idx]
-        pvd = inst2.tile_deltas[rc.pivot_k]
-        pv1, pv2, pv3 = pvd[1], pvd[2], pvd[3]
-        d1a = inst2.tile_deltas[1]
-        d2a = inst2.tile_deltas[2]
-        a1 = supercell_atom_index(
-            inst2.base_atoms[1],
-            mod(ti + d1a[1] - pv1, n1),
-            mod(tj + d1a[2] - pv2, n2),
-            mod(tk + d1a[3] - pv3, n3),
-            base_n, rep,
-        )
-        a2 = supercell_atom_index(
-            inst2.base_atoms[2],
-            mod(ti + d2a[1] - pv1, n1),
-            mod(tj + d2a[2] - pv2, n2),
-            mod(tk + d2a[3] - pv3, n3),
-            base_n, rep,
-        )
+        slot = sai2_off + 2 * (rc_idx - 1)
+        a1 = sai2[slot + 1]
+        a2 = sai2[slot + 2]
         e += inst2.prefactor * _tensor_contract_template2_changed!(
             inst2, a1, a2, mc.zlm_cache, i,
         )
     end
 
-    # N=3 fast path
-    @inbounds for rc in tpl.related3_by_base_atom[b]
+    # N=3 fast path: SAIs precomputed in tpl.sai3_flat.
+    related3 = tpl.related3_by_base_atom[b]
+    sai3 = tpl.sai3_flat
+    sai3_off = tpl.sai3_offsets[i] - 1
+    @inbounds for rc_idx in 1:length(related3)
+        rc = related3[rc_idx]
         inst3 = tpl.base_instances3[rc.inst_idx]
-        pvd = inst3.tile_deltas[rc.pivot_k]
-        pv1, pv2, pv3 = pvd[1], pvd[2], pvd[3]
-        d1a = inst3.tile_deltas[1]
-        d2a = inst3.tile_deltas[2]
-        d3a = inst3.tile_deltas[3]
-        a1 = supercell_atom_index(
-            inst3.base_atoms[1],
-            mod(ti + d1a[1] - pv1, n1),
-            mod(tj + d1a[2] - pv2, n2),
-            mod(tk + d1a[3] - pv3, n3),
-            base_n, rep,
-        )
-        a2 = supercell_atom_index(
-            inst3.base_atoms[2],
-            mod(ti + d2a[1] - pv1, n1),
-            mod(tj + d2a[2] - pv2, n2),
-            mod(tk + d2a[3] - pv3, n3),
-            base_n, rep,
-        )
-        a3 = supercell_atom_index(
-            inst3.base_atoms[3],
-            mod(ti + d3a[1] - pv1, n1),
-            mod(tj + d3a[2] - pv2, n2),
-            mod(tk + d3a[3] - pv3, n3),
-            base_n, rep,
-        )
+        slot = sai3_off + 3 * (rc_idx - 1)
+        a1 = sai3[slot + 1]
+        a2 = sai3[slot + 2]
+        a3 = sai3[slot + 3]
         e += inst3.prefactor * _tensor_contract_template3_changed!(
             inst3, a1, a2, a3, mc.zlm_cache, i,
         )
     end
 
-    # N≥4 general path
-    for rc in tpl.related_by_base_atom[b]
-        inst = tpl.base_instances[rc.inst_idx]
-        N = length(inst.base_atoms)
-        pv1, pv2, pv3 = inst.tile_deltas[rc.pivot_k]
-        @inbounds for k in 1:N
-            d1, d2, d3 = inst.tile_deltas[k]
-            mc.atoms_buf[k] = supercell_atom_index(
-                inst.base_atoms[k],
-                mod(ti + d1 - pv1, n1),
-                mod(tj + d2 - pv2, n2),
-                mod(tk + d3 - pv3, n3),
-                base_n,
-                rep,
+    # N≥4 general path: keeps on-the-fly SAI computation (no precomputed table).
+    # Both current test problems have zero N≥4 instances, so this branch is unused
+    # there; the local `_tile_coords` call below is only paid when N≥4 clusters
+    # actually exist.
+    related_other = tpl.related_by_base_atom[b]
+    if !isempty(related_other)
+        n1, n2, n3 = rep
+        ti, tj, tk = _tile_coords(i, base_n, rep)
+        for rc in related_other
+            inst = tpl.base_instances[rc.inst_idx]
+            N = length(inst.base_atoms)
+            pv1, pv2, pv3 = inst.tile_deltas[rc.pivot_k]
+            @inbounds for k in 1:N
+                d1, d2, d3 = inst.tile_deltas[k]
+                mc.atoms_buf[k] = supercell_atom_index(
+                    inst.base_atoms[k],
+                    mod(ti + d1 - pv1, n1),
+                    mod(tj + d2 - pv2, n2),
+                    mod(tk + d3 - pv3, n3),
+                    base_n,
+                    rep,
+                )
+            end
+            e += inst.prefactor * _tensor_contract_template_changed!(
+                mc.contract_other_sites,
+                mc.contract_cart_idx,
+                inst,
+                mc.atoms_buf,
+                mc.zlm_cache,
+                i,
             )
         end
-        e += inst.prefactor * _tensor_contract_template_changed!(
-            mc.contract_other_sites,
-            mc.contract_cart_idx,
-            inst,
-            mc.atoms_buf,
-            mc.zlm_cache,
-            i,
-        )
     end
     return e
 end
