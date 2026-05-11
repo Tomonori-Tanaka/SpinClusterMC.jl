@@ -478,6 +478,12 @@ end
 
     include("bcc_2x2x2/test_bcc_2x2x2.jl")
 
+    if isfile(joinpath(@__DIR__, "fege_2x2x2", "jphi.xml"))
+        include("fege_2x2x2/test_fege_2x2x2.jl")
+    else
+        @warn "Skipping fege_2x2x2 tests: test/fege_2x2x2/jphi.xml not found"
+    end
+
     if "slow" in ARGS
         if isfile(joinpath(@__DIR__, "ferh_4x4x4", "jphi.xml"))
             include("ferh_4x4x4/test_ferh_4x4x4.jl")
