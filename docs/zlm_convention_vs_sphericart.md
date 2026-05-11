@@ -113,31 +113,46 @@ F_l^0 = √((2l+1)/(4π))                                  (m = 0)
 
 ---
 
-## 一致判定 — **「定数倍で済むかは未検証」**
+## 一致判定 — **bit-exact 一致を実測で確認済み（2026-05-11）**
 
-上の規格化を見比べる限り **Magesty Zₗₘ ≡ SpheriCart Y_l^m_real**（同一）に見える。ただし
-以下の点で **数値検証なしに同一とは断言できない**：
+上の規格化を見比べる限り **Magesty Zₗₘ ≡ SpheriCart Y_l^m_real**（同一）に見えるが、念のため
+数値検証を実施。
 
-1. **位相規約**: Magesty は `(-1)ᵐ` を `P̄ₗₘ` 側に持たせ、`Zₗₘ` 側で `_parity(n)` を掛ける構造。
-   SpheriCart 側で `(-1)^m` がどのレイヤに入っているかで、m が奇のとき符号が反転する可能性が
-   ある。
-2. **m<0 の sin 系成分の符号**: Magesty は `imag((r̂x + ir̂y)^n)` を取る。SpheriCart の m<0 が
-   `sin(|m|φ)` 系なのか `-sin(|m|φ)` 系なのか、ドキュメント明記なし。
-3. **`d^m Pₗ/d(cos θ)^m` vs Associated Legendre `P_l^m`** の符号差: Condon-Shortley の
-   `(-1)^m` がどちら側に乗っているかで違いが出る。
+### 検証スクリプト
 
-**確認手順（採用判断前の必須作業）**:
+ブランチ `experiment/sphericart-zlm-compat` 上で `/tmp/sphericart-zlm-check/compare.jl` を作成。
+- `L_MAX = 3`
+- N = 25 個の単位ベクトル（軸方向 6 点 + 対角 + 任意点 + 18 ランダム点、seed 固定）
+- 全 (l, m) ∈ {l ≤ 3, |m| ≤ l}（16 個）で `Magesty.Zₗₘ_unsafe(l, m, u)` と
+  `SpheriCart.compute(SphericalHarmonics(L_MAX), u)[l*(l+1)+m+1]` を比較
 
-```julia
-using SpheriCart, Magesty
-# l_max を 2 か 3 に固定
-# 単位ベクトル列 (N=20 程度) で両者を評価
-# 各 (l, m) について比 sphericart / magesty を計算
-# - すべて 1.0 ± 1e-14 ならビット同一
-# - 一律 -1.0 → 全体符号差（補正容易）
-# - m に応じて ±1 が交互 → 位相規約差
-# - 比が無理数（√2 など）→ 規格化差
-```
+### 結果
+
+**全 (l, m) で bit-exact**（`max |Δ| ≤ 3.3 × 10⁻¹⁶`、機械精度の丸め誤差レベル）。
+
+| l | m | max abs diff |
+|---|---|---|
+| 0 | 0 | 0.0 |
+| 1 | -1, 0, 1 | 5.6e-17 |
+| 2 | -2, -1, 0, 1, 2 | ≤ 2.2e-16 |
+| 3 | -3, …, 3 | ≤ 3.3e-16 |
+
+SpheriCart の値順序は flat index `l*(l+1) + m + 1`（m = -l, …, +l）。
+
+### 含意
+
+- **規約差なし**: 定数倍補正不要、符号反転なし、位相規約一致、m<0 sin 系の符号一致
+- **既存 `jphi.xml` の SCE 係数はそのまま有効**（Magesty `BasisSets.jl` が構築する SALC は
+  SpheriCart の値で再現可能）
+- 上の章で挙げた 3 つの不確実性（位相規約・m<0 sin 系の符号・Condon-Shortley の位置）は
+  すべてクリア
+
+### SpheriCart 側の規約確認（事後）
+
+bit-exact だったということは、SpheriCart も以下を満たす：
+- Condon-Shortley `(-1)ᵐ` を含む実テッサー型
+- m<0 で sin 系（Magesty の `imag(z^|m|)` と同符号）
+- Racah 正規化（√((2l+1)/(2π) × (l-|m|)!/(l+|m|)!) × √2 由来）が Magesty と一致
 
 ---
 
@@ -173,25 +188,90 @@ using SpheriCart, Magesty
 
 ---
 
-## 性能ゲインの不確実性
+## 性能比較（実測, 2026-05-11）
 
-- SpheriCart Julia 版の公開 benchmark なし（C++ 版の論文はあるが Julia 性能は別）
-- 現状の Magesty buffered `Zₗₘ_unsafe`: 37.5 ns/call、allocation 0、sweep 寄与 9%
-- `max_l=1` では計算要素は (l_max+1)² = 4 個のみ → SIMD batch の恩恵が小さい可能性
-- Metropolis hot path は「1 原子分の 4 要素」を計算する形なので SpheriCart の「N サイト分
-  一括」とは噛み合わない。`compute!` の 1 サイト呼びが Magesty 単純呼びより速い保証はない
+`/tmp/sphericart-zlm-check/bench.jl` を BenchmarkTools.jl で実行。allocs はどちらも 0。
+
+### Scenario A: 1-site cache update（hot path 想定）
+
+`_update_atom_zlm_cache!` 相当。Magesty は buffered `Zₗₘ_unsafe` を `(l, m)` ループで呼び、
+SpheriCart は `compute(sph, u)` で `SVector` 一括返しを cache row に書き戻す。
+
+| max_l | n_values | Magesty buffered loop | SpheriCart `compute` | SpheriCart `compute!(1)` |
+|---|---|---|---|---|
+| 1 | 4  | min 35.3 ns | **min  2.8 ns** | min 42.4 ns |
+| 2 | 9  | min 95.5 ns | **min  5.2 ns** | min 61.7 ns |
+
+- 1-site では `compute(sph, u)`（SVector 返し）が **10〜20× 高速**
+- `compute!(out, sph, [u])`（1-site batched）は dispatch overhead で逆に遅い
+
+### Scenario B: 128-site full rebuild（初期化や global update 想定）
+
+| max_l | Magesty loop | SpheriCart `compute!(N)` | 比 |
+|---|---|---|---|
+| 1 | min 4.33 μs | **min 0.43 μs** | 10× |
+| 2 | min 12.0 μs | **min 0.61 μs** | 20× |
+
+128 site batched 呼びは SIMD と無 dispatch で 1 site あたり ~5 ns。Carlo の `init!` での
+`_build_zlm_cache` 相当処理に効く。
+
+### Sweep への寄与
+
+現状の sweep プロファイル: `_update_atom_zlm_cache!` 128 calls/sweep = 4.8 μs (9%)。
+SpheriCart `compute` 換算で 128 × 2.8 ns = 0.36 μs (<1%)。
+→ sweep 51.1 μs → 推定 47 μs（**約 1.09× 改善**, max_l=1 のとき）
+
+### 出力レイアウト一致性
+
+SpheriCart の flat index `l*(l+1) + m + 1`（m = -l..+l）は SpinClusterMC の
+`_zlm_col(l, m_idx) = l² + m_idx`（m_idx = 1..2l+1, m = m_idx - l - 1）と
+**列の対応関係まで含めて完全一致**：
+
+| (l, m) | SpinClusterMC `_zlm_col` | SpheriCart index |
+|---|---|---|
+| (0, 0)   | 1 | 1 |
+| (1, -1)  | 2 | 2 |
+| (1, 0)   | 3 | 3 |
+| (1, +1)  | 4 | 4 |
+| (2, -2)  | 5 | 5 |
+| (2, +2)  | 9 | 9 |
+
+→ ループの読み替え不要、メモリレイアウトもそのまま使える。
 
 ---
 
-## 結論（メモとしての判断材料）
+## 結論（2026-05-11, 検証 + ベンチ完了後）
 
-採用判断には最低限以下が必要：
+採用判断 3 点：
 
-1. **数値同一性検証**（10 行スクリプト）— Magesty と SpheriCart の `Zₗₘ` が bit-exact か、
-   定数倍か、規約差ありかを確定
-2. **マイクロベンチ** — 1 サイト `l_max=1〜2` 評価で SpheriCart が Magesty buffered 版を
-   上回るか（少なくとも互角か）
-3. **スコープ確認** — SpinClusterMC 単独で済むか、Magesty.jl 側にも波及するか
+1. ~~**数値同一性検証**~~ — **完了**。bit-exact（max |Δ| ≤ 3.3e-16, l ≤ 3 全 (l,m), 25 単位ベクトル）
+2. ~~**マイクロベンチ**~~ — **完了**。1-site で 12〜18×、128-site batched で 10〜20× 高速
+3. ~~**スコープ確認**~~ — **完了**。規約一致により **SpinClusterMC 単独差し替えで OK**
 
-上記 3 点を確認しないまま実装ブランチを切ると、**SCE 係数の意味が変わるサイレントな数値
-破壊**または **大量のコード変更後に性能改善が出ないという無駄足**のいずれかになる。
+### 推奨：採用に進む
+
+実装範囲は局所：
+- `JPhiSpinMC` に `SphericalHarmonics{max_l, ...}` を 1 個持たせる（コンストラクタで生成）
+- `_update_atom_zlm_cache!` の中身を `compute(sph, u)` ベースの SVector 書き戻しに差し替え
+- `_build_zlm_cache` も `compute!(cache, sph, spins)` に切替（init 高速化のおまけ）
+- `zlm_dnpl_buf` フィールドおよび `_alloc_zlm_dnpl_buf` を削除可能（Magesty Zₗₘ_unsafe への
+  依存が無くなる場合）— ただし `_tensor_contract_instance` 等で Magesty を他に使っていれば
+  そのまま残す
+- Project.toml に `SpheriCart` 追加、`compat` 設定
+
+期待効果：
+- sweep 51.1 μs → ~47 μs（**1.09×**, max_l=1 のとき）
+- 数値結果は bit-exact 一致なので、リグレッションテストは全件 pass する見込み
+- `zlm_dnpl_buf` まわりのコード削減（buffered API 維持コスト消滅）
+
+### 残るリスク
+
+- SpheriCart のバージョン上げで Racah 正規化の規約が変わる可能性 → `compat` で固定
+- SpheriCart 側で `SphericalHarmonics(L)` の生成コストが ~数 KB の lookup table を持つ
+  ことがある（init で 1 回なので問題なし）
+- 既存テストの中に Magesty `Zₗₘ_unsafe` の値を直接アサートしているものがあれば、
+  そこは SpheriCart に切り替えるか tolerance を明示する必要あり
+
+### 不採用の理由になりうる事象
+
+なし。検証で全て解消した。残る判断は実装着手のタイミングのみ。
