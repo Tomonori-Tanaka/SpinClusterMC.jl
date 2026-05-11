@@ -50,6 +50,19 @@ struct LocalEnergyTemplate
     related_by_base_atom::Vector{Vector{RelatedBaseCluster}}       # → base_instances
     related2_by_base_atom::Vector{Vector{RelatedBaseCluster}}      # → base_instances2
     related3_by_base_atom::Vector{Vector{RelatedBaseCluster}}      # → base_instances3
+    # Precomputed supercell-atom indices for the N=2 and N=3 hot paths. Built once
+    # at template construction; replaces the per-sweep `_tile_coords` + `mod`-heavy
+    # `supercell_atom_index` calls in `_template_local_energy!`. For each supercell
+    # atom `i` and each `rc` in `related{2,3}_by_base_atom[base_of(i)]`, the table
+    # stores the N SAI values for the cluster's sites at positions
+    #   sai{2,3}_flat[sai{2,3}_offsets[i] + N*(rc_local_idx-1) + (k-1)]
+    # for `k = 1..N`. `sai{2,3}_offsets[i+1] - sai{2,3}_offsets[i]` is N * len(related[b]).
+    # N ≥ 4 path keeps the on-the-fly SAI calls; both test problems (bcc_2x2x2,
+    # ferh_4x4x4) have zero N ≥ 4 clusters.
+    sai2_flat::Vector{Int}
+    sai2_offsets::Vector{Int}
+    sai3_flat::Vector{Int}
+    sai3_offsets::Vector{Int}
 end
 
 # Iterate over unique base-cell cluster instances for `cbc` (ti=tj=tk=0 only).
@@ -179,10 +192,70 @@ function build_local_energy_template(h::SCEHamiltonian)::LocalEnergyTemplate
         end
     end
 
+    sai2_flat, sai2_offsets = _build_sai_table_n(
+        related2_by_base_atom, base_instances2, h, 2,
+    )
+    sai3_flat, sai3_offsets = _build_sai_table_n(
+        related3_by_base_atom, base_instances3, h, 3,
+    )
+
     return LocalEnergyTemplate(
         base_instances, base_instances2, base_instances3,
         related_by_base_atom, related2_by_base_atom, related3_by_base_atom,
+        sai2_flat, sai2_offsets, sai3_flat, sai3_offsets,
     )
+end
+
+# Precompute SAIs for one fixed cluster size N (2 or 3). For each supercell atom `i`,
+# for each `rc` in `related_by_base_atom[base_of(i)]`, store the N supercell-atom
+# indices of the cluster sites packed in `flat`.
+#
+# Indexing (all 1-based, Julia convention):
+#   slice for atom `i` is `flat[offsets[i] : offsets[i+1] - 1]` (length = N * len(related[b]))
+#   within that slice, `rc_idx`'s SAIs are at positions `N*(rc_idx-1) + 1 .. N*rc_idx`
+#   the readers in `_template_local_energy!` use `base_off = offsets[i] - 1` and
+#   `flat[base_off + N*(rc_idx-1) + k]`, which is equivalent.
+# `base_instances_n` provides `base_atoms` and `tile_deltas`.
+function _build_sai_table_n(
+    related_by_base_atom::Vector{Vector{RelatedBaseCluster}},
+    base_instances_n,
+    h::SCEHamiltonian,
+    N::Int,
+)::Tuple{Vector{Int}, Vector{Int}}
+    n_atoms = h.n_atoms
+    base_n = h.base_n_atoms
+    rep = h.repeat
+    n1, n2, n3 = rep
+    offsets = Vector{Int}(undef, n_atoms + 1)
+    offsets[1] = 1
+    @inbounds for i in 1:n_atoms
+        b = ((i - 1) % base_n) + 1
+        offsets[i + 1] = offsets[i] + N * length(related_by_base_atom[b])
+    end
+    flat = Vector{Int}(undef, offsets[n_atoms + 1] - 1)
+    @inbounds for i in 1:n_atoms
+        b = ((i - 1) % base_n) + 1
+        ti, tj, tk = _tile_coords(i, base_n, rep)
+        base_off = offsets[i] - 1
+        related = related_by_base_atom[b]
+        for rc_idx in 1:length(related)
+            rc = related[rc_idx]
+            inst = base_instances_n[rc.inst_idx]
+            pvd = inst.tile_deltas[rc.pivot_k]
+            pv1, pv2, pv3 = pvd[1], pvd[2], pvd[3]
+            for k in 1:N
+                da = inst.tile_deltas[k]
+                flat[base_off + N * (rc_idx - 1) + k] = supercell_atom_index(
+                    inst.base_atoms[k],
+                    mod(ti + da[1] - pv1, n1),
+                    mod(tj + da[2] - pv2, n2),
+                    mod(tk + da[3] - pv3, n3),
+                    base_n, rep,
+                )
+            end
+        end
+    end
+    return flat, offsets
 end
 
 """

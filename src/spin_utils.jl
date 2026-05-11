@@ -77,51 +77,81 @@ function _alloc_zlm_cache(n_atoms::Int, max_l::Int)::Matrix{Float64}
     return zeros(Float64, n_atoms, (max_l + 1)^2)
 end
 
-# Buffer passed to Magesty.MySphericalHarmonics.Zₗₘ_unsafe(l, m, u, buf) for
-# `LegendrePolynomials.dnPl`'s working storage. Sized once with `max_l + 1` to cover
-# every `(l, m)` with `l ≤ max_l`. Reusing the buffer eliminates the per-call heap
-# allocation that previously dominated the Metropolis hot path.
-@inline _alloc_zlm_dnpl_buf(max_l::Int)::Vector{Float64} = Vector{Float64}(undef, max_l + 1)
+# SpheriCart's flat output ordering `l*(l+1) + m + 1` (m = -l..+l) matches
+# `_zlm_col(l, m_idx) = l² + m_idx` (m_idx = 1..2l+1) value-for-value, so the
+# cache columns can be written straight through without remapping.
+# Bit-exact agreement with Magesty's `Zₗₘ_unsafe` is verified in
+# docs/zlm_convention_vs_sphericart.md (max |Δ| ≤ 3.3e-16 for l ≤ 3) for
+# SpheriCart's default `:L2` normalisation, which we rely on here.
+#
+# Note: SpheriCart's `STATIC=true` (SVector return) only holds for `max_l ≤ 15`.
+# Above that, `compute(sph, u)` allocates a `Vector{Float64}` and this code path
+# regresses to a per-call heap allocation. The SCE models we support keep
+# `max_l ≤ 3`, so this limit is well clear; revisit if it ever stops being true.
 
 """
-Refresh cached `Z_lm` values for one atom from its current spin. `dnpl_buf` is the
-working buffer used by `Zₗₘ_unsafe`'s buffered overload; allocate once per thread via
-`_alloc_zlm_dnpl_buf(max_l)`.
+Refresh cached `Z_lm` values for one atom from its current spin.
 """
 function _update_atom_zlm_cache!(
     zlm_cache::Matrix{Float64},
     atom::Int,
     u::AbstractVector{<:Real},
-    max_l::Int,
-    dnpl_buf::Vector{Float64},
+    sph::SphericalHarmonics,
 )
-    @inbounds for l in 0:max_l
-        @simd for m_idx in 1:(2 * l + 1)
-            m = m_idx - l - 1
-            zlm_cache[atom, _zlm_col(l, m_idx)] = Zₗₘ_unsafe(l, m, u, dnpl_buf)
-        end
+    y = compute(sph, SVector{3,Float64}(u[1], u[2], u[3]))
+    @inbounds @simd for c in eachindex(y)
+        zlm_cache[atom, c] = y[c]
+    end
+    return nothing
+end
+
+# SVector overload avoids a temporary copy when callers already have a unit vector
+# as `SVector{3,Float64}` (e.g. `mc.spins[atom]`).
+function _update_atom_zlm_cache!(
+    zlm_cache::Matrix{Float64},
+    atom::Int,
+    u::SVector{3,Float64},
+    sph::SphericalHarmonics,
+)
+    y = compute(sph, u)
+    @inbounds @simd for c in eachindex(y)
+        zlm_cache[atom, c] = y[c]
     end
     return nothing
 end
 
 """
-Build a per-atom `Z_lm` cache from a spin matrix without requiring a `JPhiSpinMC` instance.
+Build a per-atom `Z_lm` cache from a spin matrix or `Vector{SVector{3,Float64}}`.
 Rows index atoms; columns index `(l, m)` via `_zlm_col`. Useful for standalone full-energy
 evaluation, e.g. in global update algorithms or benchmarks.
 """
 function _build_zlm_cache(
-    spin_directions::Union{AbstractMatrix{<:Real},AbstractVector{<:SVector{3,<:Real}}},
+    spin_directions::AbstractVector{<:SVector{3,<:Real}},
     max_l::Int,
 )::Matrix{Float64}
-    n_atoms = _n_spins(spin_directions)
+    n_atoms = length(spin_directions)
     ncols = (max_l + 1)^2
     zlm_cache = Matrix{Float64}(undef, n_atoms, ncols)
-    dnpl_buf = _alloc_zlm_dnpl_buf(max_l)
-    @inbounds for atom in 1:n_atoms
-        _update_atom_zlm_cache!(zlm_cache, atom, _spin_at(spin_directions, atom),
-                                max_l, dnpl_buf)
-    end
+    sph = SphericalHarmonics(max_l)
+    # `compute!` writes a (n_atoms × ncols) matrix in one batched call.
+    compute!(zlm_cache, sph, spin_directions)
     return zlm_cache
+end
+
+function _build_zlm_cache(
+    spin_directions::AbstractMatrix{<:Real},
+    max_l::Int,
+)::Matrix{Float64}
+    size(spin_directions, 1) == 3 || throw(ArgumentError(
+        "spin matrix must have 3 rows, got $(size(spin_directions, 1))"))
+    n_atoms = size(spin_directions, 2)
+    spins_sv = Vector{SVector{3,Float64}}(undef, n_atoms)
+    @inbounds for ia in 1:n_atoms
+        spins_sv[ia] = SVector{3,Float64}(spin_directions[1, ia],
+                                          spin_directions[2, ia],
+                                          spin_directions[3, ia])
+    end
+    return _build_zlm_cache(spins_sv, max_l)
 end
 
 """
