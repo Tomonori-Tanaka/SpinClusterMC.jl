@@ -1428,7 +1428,11 @@ end
 # deterministically on deserialization.
 
 function Serialization.serialize(s::Serialization.AbstractSerializer, mc::JPhiSpinMC)
-    Serialization.serialize_type(s, JPhiSpinMC, false)
+    # `typeof(mc)` is a concrete `JPhiSpinMC{S}` (DataType) — `JPhiSpinMC` itself
+    # is now a UnionAll due to the `{S<:SphericalHarmonics}` parameter, and
+    # `serialize_type` only dispatches on DataType. The deserialize half is keyed
+    # on `::Type{<:JPhiSpinMC}` so it matches whatever concrete subtype we write.
+    Serialization.serialize_type(s, typeof(mc), false)
     Serialization.serialize(s, mc.T)
     Serialization.serialize(s, _spins_to_matrix(mc.spins))
     Serialization.serialize(s, mc.energy)
