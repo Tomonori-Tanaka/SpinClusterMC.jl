@@ -92,18 +92,21 @@ m=0 では √2 が掛からないので
 
 - **実球面調和関数** `Y_l^m_real`（単位ベクトル `r̂` の関数）
 - **実立体調和関数** `r^l × Y_l^m_real`（`r` 込みの多項式）
-- Racah 正規化（"Racah normalization" と明記）
+- 正規化は `SphericalHarmonics(L; normalisation=...)` で選択。`:L2`（デフォルト、
+  L2-orthonormal: `∫|Y_ℓᵐ|² dΩ = 1`）、`:racah`（Racah, `∫|Y_ℓᵐ|² dΩ = 4π/(2ℓ+1)`）など
 
-### Racah 正規化の係数
+### `:L2` 正規化の係数（本リポジトリで使用）
 
-公式ドキュメントによれば、SpheriCart の real spherical harmonics の規格化因子は
+`SpheriCart.jl/src/normalisations.jl` の実装によれば、デフォルト `:L2` の規格化因子は
 
 ```
 F_l^m = (-1)^m √((2l+1)/(2π) × (l-m)!/(l+m)!)        (m ≠ 0)
 F_l^0 = √((2l+1)/(4π))                                  (m = 0)
 ```
 
-これは Magesty の `Zₗₘ` の規格化と **数式上は一致する**（√2 因子は Racah で内蔵済み）。
+これは Magesty の `Zₗₘ` の規格化と **数式上は一致する**（√2 因子は L2 規格化で内蔵済み）。
+名前は紛らわしいが「L2-orthonormal on unit sphere」が SpheriCart のデフォルト動作で、
+SpheriCart 内の `:racah` 名（別の `4π/(2ℓ+1)` 規格化）と取り違えないこと。
 
 ### API（要点）
 
@@ -152,7 +155,7 @@ SpheriCart の値順序は flat index `l*(l+1) + m + 1`（m = -l, …, +l）。
 bit-exact だったということは、SpheriCart も以下を満たす：
 - Condon-Shortley `(-1)ᵐ` を含む実テッサー型
 - m<0 で sin 系（Magesty の `imag(z^|m|)` と同符号）
-- Racah 正規化（√((2l+1)/(2π) × (l-|m|)!/(l+|m|)!) × √2 由来）が Magesty と一致
+- `:L2` 規格化（√((2l+1)/(2π) × (l-|m|)!/(l+|m|)!) × √2 由来）が Magesty と一致
 
 ---
 
@@ -298,6 +301,6 @@ abstract typed field `sph::SphericalHarmonics` のままだと `compute(sph, u)`
 
 ### 残るリスク
 
-- SpheriCart のバージョン上げで Racah 正規化の規約が変わる可能性 → `compat = "0.2"` で固定
+- SpheriCart のバージョン上げで `:L2` 正規化の規約が変わる可能性 → `compat = "0.2"` で固定
 - SpheriCart 側で `SphericalHarmonics(L)` の生成コストが ~数 KB の lookup table を持つ
   ことがある（init で 1 回なので問題なし）

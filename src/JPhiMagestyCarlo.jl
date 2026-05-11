@@ -8,8 +8,9 @@ single-spin Metropolis updates. Local energy deltas reuse preallocated stride / 
 per-update `Vector` allocations in the tensor contraction). Optional task parameter `spin_theta_max`
 selects a local geodesic spin proposal instead of i.i.d. uniform-on-sphere draws.
 
-Real (tesseral) spherical harmonics use `SpheriCart.SphericalHarmonics` (Racah normalization),
-which is bit-exact with Magesty's `Zₗₘ_unsafe` — see `docs/zlm_convention_vs_sphericart.md`.
+Real (tesseral) spherical harmonics use `SpheriCart.SphericalHarmonics` with its default
+`:L2` (L2-orthonormal) normalisation, which is bit-exact with Magesty's `Zₗₘ_unsafe` for
+`l ≤ 3` — see `docs/zlm_convention_vs_sphericart.md`.
 """
 module JPhiMagestyCarlo
 
