@@ -142,46 +142,40 @@ field type を確定させる。あるいは Carlo アダプタ分離と同時�
 `profiler` エージェントで `:tensor_template` パスを計測。条件：max_l=1、N=2 base instances=88、
 T=0.02585 eV、spin_theta_max=0.5。
 
-### Before / After 比較
+### Before / After 比較（3 段階）
 
-「Before」は何も手を入れていない時点。「After」は以下 2 件を適用後：
+| 段階 | 内容 |
+|---|---|
+| Before | 何も手を入れていない時点 |
+| 中間 | (1) `related_instances = Int[]` 削除 (2) Magesty buffered `Zₗₘ_unsafe(l, m, u, buf)` 採用 |
+| After | (3) SpheriCart.jl 採用（parametric `JPhiSpinMC{S<:SphericalHarmonics}`）— bit-exact 一致を確認の上 |
 
-1. `sweep!` 内の `related_instances = Int[]`（`:tensor_template` パスで未使用）を削除
-2. Magesty.jl の buffered `Zₗₘ_unsafe(l, m, u, buf)` を採用。`JPhiSpinMC` に `zlm_dnpl_buf`
-   フィールド（長さ `max_l+1`）を持たせ、`_update_atom_zlm_cache!` 経由で渡す
+| 指標 | Before | 中間 | After (SpheriCart) | 累積変化 |
+|---|---|---|---|---|
+| sweep（`:tensor_template`, GC 除く） | 57.9 μs | 51.1 μs | **45.2 μs** | **1.28×** |
+| allocs/sweep | 1152 | 0 | **0** | 完全消失 |
+| memory/sweep | 38.9 KB | 0 B | **0 B** | 完全消失 |
+| `_update_atom_zlm_cache!` per call | ~66.7 ns | 37.5 ns | **2.0 ns** | **33×** |
+| `_update_atom_zlm_cache!` 寄与 | 43% | 9% | **<0.5%** | 実質ボトルネックから外れた |
 
-| 指標 | Before | After | 変化 |
-|---|---|---|---|
-| sweep（`:tensor_template`, GC 除く） | 57.9 μs | **51.1 μs** | **1.13×** |
-| sweep（`:tensor`） | 69.1 μs | 62.0 μs | 1.11× |
-| allocs/sweep（`:tensor_template`） | 1152 | **0** | 完全消失 |
-| memory/sweep（`:tensor_template`） | 38.9 KB | **0 B** | 完全消失 |
-| GC overhead | 3.1 μs (5.1%) | 0 | 消失 |
-| `_update_atom_zlm_cache!`（128 calls/sweep） | 24.7 μs (43%) | **4.8 μs (9%)** | **5.1×** |
-| `_update_atom_zlm_cache!`（per call） | ~66.7 ns | 37.5 ns | 1.78× |
+### After の sweep 内訳（45.2 μs/sweep, allocs 0, GC 0）
 
-### After の sweep 内訳（51.1 μs/sweep, allocs 0, GC 0）
-
-| 処理 | 呼び出し回数/sweep | 時間 | 割合 |
-|---|---|---|---|
-| `_tensor_contract_template2_changed!`（テンソル収縮） | 2816 | **23.7 μs** | **46%** |
-| `supercell_atom_index`（mod + 乗算） | 5632 | **14.1 μs** | **28%** |
-| `_update_atom_zlm_cache!` | 128 | 4.8 μs | 9% |
-| ループ・分岐・tile_coords 等の残差 | — | 6.2 μs | 12% |
-| `_propose_spin_geodesic` | 128 | 1.6 μs | 3% |
-| その他（zlm_row_buf コピー, Metropolis rand+exp） | — | 0.9 μs | 2% |
+| 処理 | 推定割合 |
+|---|---|
+| `_tensor_contract_template2_changed!`（テンソル収縮） | ~50%（最大） |
+| `supercell_atom_index`（mod + 乗算） | ~30% |
+| `_update_atom_zlm_cache!` | <0.5% |
+| ループ・分岐・tile_coords 等の残差 | ~13% |
+| `_propose_spin_geodesic`、その他 | 残り |
 
 ### 残る主要ボトルネックと候補との対応
 
-- **収縮カーネル `_tensor_contract_template2_changed!`（46%）** ← 候補 A・B が対応。
-  特に候補 A（`zlm_cache` レイアウト転置）は数値規約を変えない安全な改善で、
-  内側 SIMD ループの stride を 1 にできるため再優先候補。
-- **`supercell_atom_index` の mod + 乗算（28%）** ← 新規候補（下記「候補F」を追加）。
-  数値結果に影響しないリファクタリングで、`repeat` が小さい本ベンチでは比較的大きな割合を
-  占める。
+- **収縮カーネル `_tensor_contract_template2_changed!`** ← 候補 A・B が対応（最大ボトルネック）
+- **`supercell_atom_index` の mod + 乗算** ← 候補 F が対応（下記）
 
-候補 E（`Zₗₘ_unsafe` のバッファ事前確保）は完了。Magesty.jl 側で API が実装され、
-SpinClusterMC 側で受け取り側を更新済み（commit pending）。
+完了済み：
+- 候補 E（`Zₗₘ_unsafe` のバッファ事前確保, Magesty buffered API）
+- SpheriCart 採用（Zlm hot path 実質除去）
 
 ---
 

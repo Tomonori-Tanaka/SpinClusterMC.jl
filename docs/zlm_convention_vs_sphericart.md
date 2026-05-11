@@ -240,38 +240,64 @@ SpheriCart の flat index `l*(l+1) + m + 1`（m = -l..+l）は SpinClusterMC の
 
 ---
 
-## 結論（2026-05-11, 検証 + ベンチ完了後）
+## 結論（2026-05-11, 採用済み）
 
 採用判断 3 点：
 
 1. ~~**数値同一性検証**~~ — **完了**。bit-exact（max |Δ| ≤ 3.3e-16, l ≤ 3 全 (l,m), 25 単位ベクトル）
 2. ~~**マイクロベンチ**~~ — **完了**。1-site で 12〜18×、128-site batched で 10〜20× 高速
-3. ~~**スコープ確認**~~ — **完了**。規約一致により **SpinClusterMC 単独差し替えで OK**
+3. ~~**スコープ確認**~~ — **完了**。規約一致により SpinClusterMC 単独差し替えで OK
 
-### 推奨：採用に進む
+### 実装結果（sweep ベンチ on bcc_2x2x2 + 2x2x2 タイリング）
 
-実装範囲は局所：
-- `JPhiSpinMC` に `SphericalHarmonics{max_l, ...}` を 1 個持たせる（コンストラクタで生成）
-- `_update_atom_zlm_cache!` の中身を `compute(sph, u)` ベースの SVector 書き戻しに差し替え
-- `_build_zlm_cache` も `compute!(cache, sph, spins)` に切替（init 高速化のおまけ）
-- `zlm_dnpl_buf` フィールドおよび `_alloc_zlm_dnpl_buf` を削除可能（Magesty Zₗₘ_unsafe への
-  依存が無くなる場合）— ただし `_tensor_contract_instance` 等で Magesty を他に使っていれば
-  そのまま残す
-- Project.toml に `SpheriCart` 追加、`compat` 設定
+| 指標 | Magesty buffered (baseline) | SpheriCart 採用後 |
+|---|---|---|
+| sweep min | 51.1 μs | **45.2 μs**（1.13×） |
+| allocs/sweep | 0 | **0**（維持） |
+| `_update_atom_zlm_cache!` per-call | 37.5 ns | **2.0 ns**（19×） |
+| Zlm の sweep 寄与 | 9% | **< 0.5%** |
 
-期待効果：
-- sweep 51.1 μs → ~47 μs（**1.09×**, max_l=1 のとき）
-- 数値結果は bit-exact 一致なので、リグレッションテストは全件 pass する見込み
-- `zlm_dnpl_buf` まわりのコード削減（buffered API 維持コスト消滅）
+865/865 tests pass、数値結果は bit-exact 一致。Zlm は実質ボトルネックから外れた。
+
+### 採用時のハマりどころ
+
+`JPhiSpinMC` を **parametric** にする必要があった：
+
+```julia
+mutable struct JPhiSpinMC{S<:SphericalHarmonics} <: AbstractMC
+    ...
+    sph::S
+    ...
+end
+```
+
+abstract typed field `sph::SphericalHarmonics` のままだと `compute(sph, u)` が返す
+`SVector{(L+1)²,Float64}` のサイズ L を静的に知れず、毎回 ~39 bytes ヒープ割り当て
+（~5 KB/sweep × 128 atoms）が発生した。parametric 化で concrete 型に変わり、SVector が
+スタック割り当てに戻って 0 alloc を回復。
+
+副作用：
+- `::Type{JPhiSpinMC}` 直接ディスパッチを `::Type{<:JPhiSpinMC}` に変更
+  （`Carlo.register_evaluables` と `Serialization.deserialize`）
+- 他の `mc::JPhiSpinMC` シグネチャは UnionAll マッチで無変更で済む
+
+### 採用に至った変更（実装済み）
+
+- `Project.toml` に `SpheriCart = "0.2"` を追加
+- `JPhiSpinMC` を parametric struct `JPhiSpinMC{S<:SphericalHarmonics}` に変更、`sph::S`
+  フィールドを追加、`zlm_dnpl_buf::Vector{Float64}` フィールドを削除
+- `_update_atom_zlm_cache!` の中身を `compute(sph, u)` ベースに差し替え（Matrix view 用と
+  SVector 用の 2 メソッドを提供）
+- `_build_zlm_cache` を `compute!(cache, sph, spins)` 一括版に差し替え
+- `coupled_cluster_energy` / `_tensor_contract_instance`（reference path）の `Zₗₘ_unsafe`
+  呼びも SpheriCart 化（site 別 `l` を `l*l + m_idx` で取り出す形）
+- `Magesty.MySphericalHarmonics: Zₗₘ_unsafe` の import を削除
+- `_alloc_zlm_dnpl_buf` ヘルパーを削除
+- `::Type{JPhiSpinMC}` ディスパッチを `::Type{<:JPhiSpinMC}` に変更（2 箇所）
+- test plumbing（5 箇所）を `sph = JMCC.SphericalHarmonics(max_l)` ベースに更新
 
 ### 残るリスク
 
-- SpheriCart のバージョン上げで Racah 正規化の規約が変わる可能性 → `compat` で固定
+- SpheriCart のバージョン上げで Racah 正規化の規約が変わる可能性 → `compat = "0.2"` で固定
 - SpheriCart 側で `SphericalHarmonics(L)` の生成コストが ~数 KB の lookup table を持つ
   ことがある（init で 1 回なので問題なし）
-- 既存テストの中に Magesty `Zₗₘ_unsafe` の値を直接アサートしているものがあれば、
-  そこは SpheriCart に切り替えるか tolerance を明示する必要あり
-
-### 不採用の理由になりうる事象
-
-なし。検証で全て解消した。残る判断は実装着手のタイミングのみ。

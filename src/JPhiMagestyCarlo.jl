@@ -8,7 +8,8 @@ single-spin Metropolis updates. Local energy deltas reuse preallocated stride / 
 per-update `Vector` allocations in the tensor contraction). Optional task parameter `spin_theta_max`
 selects a local geodesic spin proposal instead of i.i.d. uniform-on-sphere draws.
 
-Real (tesseral) spherical harmonics use `Magesty.MySphericalHarmonics.Zₗₘ`.
+Real (tesseral) spherical harmonics use `SpheriCart.SphericalHarmonics` (Racah normalization),
+which is bit-exact with Magesty's `Zₗₘ_unsafe` — see `docs/zlm_convention_vs_sphericart.md`.
 """
 module JPhiMagestyCarlo
 
@@ -22,8 +23,8 @@ using StaticArrays
 import Serialization
 
 using Magesty.Basis: CoupledBasis_with_coefficient
-using Magesty.MySphericalHarmonics: Zₗₘ_unsafe
 using Magesty.XMLIO: read_basisset_from_xml
+using SpheriCart: SphericalHarmonics, compute, compute!
 
 export SCEHamiltonian,
     load_sce_hamiltonian,
@@ -361,13 +362,16 @@ function coupled_cluster_energy(
                     push!(searched_pairs, pair)
 
                     sh_values = Vector{Vector{Float64}}(undef, N)
+                    sph_local = SphericalHarmonics(maximum(cbc.ls))
                     for (site_idx, atom) in enumerate(translated_atoms)
                         l = cbc.ls[site_idx]
                         sh_values[site_idx] = Vector{Float64}(undef, 2 * l + 1)
                         u = _spin_at(spin_directions, atom)
-                        for m_idx in 1:(2 * l + 1)
-                            m = m_idx - l - 1
-                            sh_values[site_idx][m_idx] = Zₗₘ_unsafe(l, m, u)
+                        y = compute(sph_local,
+                                    SVector{3,Float64}(u[1], u[2], u[3]))
+                        base = l * l
+                        @inbounds @simd for m_idx in 1:(2 * l + 1)
+                            sh_values[site_idx][m_idx] = y[base + m_idx]
                         end
                     end
 
@@ -406,13 +410,15 @@ Evaluate one cluster tensor contraction for the provided translated atoms.
 )::Float64
     N = length(cbc.atoms)
     sh_values = Vector{Vector{Float64}}(undef, N)
+    sph_local = SphericalHarmonics(maximum(cbc.ls))
     for (site_idx, atom) in enumerate(translated_atoms)
         l = cbc.ls[site_idx]
         sh_values[site_idx] = Vector{Float64}(undef, 2 * l + 1)
         u = _spin_at(spin_directions, atom)
-        for m_idx in 1:(2 * l + 1)
-            m = m_idx - l - 1
-            sh_values[site_idx][m_idx] = Zₗₘ_unsafe(l, m, u)
+        y = compute(sph_local, SVector{3,Float64}(u[1], u[2], u[3]))
+        base = l * l
+        @inbounds @simd for m_idx in 1:(2 * l + 1)
+            sh_values[site_idx][m_idx] = y[base + m_idx]
         end
     end
 
@@ -605,7 +611,7 @@ j0 is intentionally excluded because this package is used for MC sampling where 
 
 `spin_directions` should be `3 × h.n_atoms`: rows 1–3 are `x`, `y`, `z` of the spin direction; columns are
 supercell atoms (`a` → column `a`). Only the column count is checked here; each column is passed to
-`Zₗₘ_unsafe` as a 3-vector inside `coupled_cluster_energy`. Shape matches `h.map_sym`, `h.repeat`, and
+`SpheriCart.compute` as a 3-vector inside `coupled_cluster_energy`. Shape matches `h.map_sym`, `h.repeat`, and
 `h.base_n_atoms` as in that routine.
 """
 function sce_energy(
@@ -733,7 +739,7 @@ Derived quantities registered via `Carlo.register_evaluables`:
 | `:BinderRatio` | `⟨m²⟩² / ⟨m⁴⟩` |
 | `:Susceptibility` | `N ⟨m²⟩ / T` |
 """
-mutable struct JPhiSpinMC <: AbstractMC
+mutable struct JPhiSpinMC{S<:SphericalHarmonics} <: AbstractMC
     T::Float64
     ham::SCEHamiltonian
     spins::Vector{SVector{3,Float64}}
@@ -747,10 +753,12 @@ mutable struct JPhiSpinMC <: AbstractMC
     # Preallocated buffer to save/restore one atom's ZLM row on Metropolis rejection,
     # avoiding recomputation of all (max_l+1)² spherical harmonics for rejected moves.
     zlm_row_buf::Vector{Float64}
-    # Working buffer passed to Magesty's buffered `Zₗₘ_unsafe(l, m, u, buf)` (used by
-    # `LegendrePolynomials.dnPl`). Allocated once with length `max_l + 1`; reusing it
-    # avoids the per-atom-update heap allocation that dominated the sweep hot path.
-    zlm_dnpl_buf::Vector{Float64}
+    # Real spherical-harmonics evaluator from SpheriCart.jl. Bit-exact replacement for
+    # Magesty's `Zₗₘ_unsafe` (see docs/zlm_convention_vs_sphericart.md). `JPhiSpinMC` is
+    # parameterized on `S<:SphericalHarmonics` so the concrete `(L+1)²` size is visible
+    # at every `compute(sph, u)` call site; otherwise the returned `SVector` would heap-
+    # allocate every Metropolis proposal (~5 KB/sweep at 128 atoms).
+    sph::S
     # Reused in Metropolis sweeps to avoid per-instance allocations in delta energy.
     # (strides and dims are now precomputed in ClusterInstance)
     contract_other_sites::Vector{Int}
@@ -858,7 +866,7 @@ function JPhiSpinMC(params::AbstractDict)
         )
         zlm_cache       = _alloc_zlm_cache(n, max_l)
         zlm_row_buf     = Vector{Float64}(undef, (max_l + 1)^2)
-        zlm_dnpl_buf    = _alloc_zlm_dnpl_buf(max_l)
+        sph             = SphericalHarmonics(max_l)
         other_sites_buf = Vector{Int}(undef, max(max_sites, 1))
         cart_idx_buf    = Vector{Int}(undef, max(max_sites, 1))
         # Build the template eagerly so mc is usable without Carlo.init!
@@ -869,7 +877,7 @@ function JPhiSpinMC(params::AbstractDict)
             T, ham, [zero(SVector{3,Float64}) for _ in 1:n], 0.0,
             stub_cache,
             active_body_indices, Int[], [Int[] for _ in 1:n],
-            max_l, zlm_cache, zlm_row_buf, zlm_dnpl_buf,
+            max_l, zlm_cache, zlm_row_buf, sph,
             other_sites_buf, cart_idx_buf,
             spin_theta_max, renorm_every, 0,
             xml, rep, enabled_bodies, energy_kernel,
@@ -883,7 +891,7 @@ function JPhiSpinMC(params::AbstractDict)
     derived = _get_or_build_derived(xml, rep, active_body_indices, cache, ham.n_atoms)
     zlm_cache = _alloc_zlm_cache(ham.n_atoms, derived.max_l)
     zlm_row_buf = Vector{Float64}(undef, (derived.max_l + 1)^2)
-    zlm_dnpl_buf = _alloc_zlm_dnpl_buf(derived.max_l)
+    sph = SphericalHarmonics(derived.max_l)
     other_sites_work = Vector{Int}(undef, derived.max_sites)
     cart_idx_work = Vector{Int}(undef, derived.max_sites)
     return JPhiSpinMC(
@@ -898,7 +906,7 @@ function JPhiSpinMC(params::AbstractDict)
         derived.max_l,
         zlm_cache,
         zlm_row_buf,
-        zlm_dnpl_buf,
+        sph,
         other_sites_work,
         cart_idx_work,
         spin_theta_max,
@@ -1018,10 +1026,7 @@ end
 Rebuild the full per-atom `Z_lm` cache from current MC spins.
 """
 function _rebuild_zlm_cache!(mc::JPhiSpinMC)
-    @inbounds for atom in 1:mc.ham.n_atoms
-        _update_atom_zlm_cache!(mc.zlm_cache, atom, mc.spins[atom], mc.max_l,
-                                mc.zlm_dnpl_buf)
-    end
+    compute!(mc.zlm_cache, mc.sph, mc.spins)
     return nothing
 end
 
@@ -1348,7 +1353,7 @@ function Carlo.sweep!(mc::JPhiSpinMC, ctx::MCContext)
             zlm_row_buf[j] = mc.zlm_cache[i, j]
         end
         mc.spins[i] = s_new
-        _update_atom_zlm_cache!(mc.zlm_cache, i, s_new, mc.max_l, mc.zlm_dnpl_buf)
+        _update_atom_zlm_cache!(mc.zlm_cache, i, s_new, mc.sph)
 
         E_new_local = if use_template
             _template_local_energy!(mc, i)
@@ -1411,7 +1416,7 @@ function Carlo.measure!(mc::JPhiSpinMC, ctx::MCContext, comm::MPI.Comm)
     return nothing
 end
 
-function Carlo.register_evaluables(::Type{JPhiSpinMC}, eval::AbstractEvaluator, params::AbstractDict)
+function Carlo.register_evaluables(::Type{<:JPhiSpinMC}, eval::AbstractEvaluator, params::AbstractDict)
     T = Float64(params[:T])
     key = (params[:xml_path], _parse_repeat_param(params))
     # Use the process-local cache if available (populated by JPhiSpinMC constructor),
@@ -1458,7 +1463,7 @@ function Serialization.serialize(s::Serialization.AbstractSerializer, mc::JPhiSp
     Serialization.serialize(s, mc.energy_kernel)
 end
 
-function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{JPhiSpinMC})
+function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{<:JPhiSpinMC})
     T            = Serialization.deserialize(s)::Float64
     spins_mat    = Serialization.deserialize(s)::Matrix{Float64}
     spins        = _matrix_to_spins(spins_mat)
@@ -1480,7 +1485,7 @@ function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{J
     derived = _get_or_build_derived(xml_path, repeat, active_body_indices, cache, ham.n_atoms)
     zlm_cache = _alloc_zlm_cache(ham.n_atoms, derived.max_l)
     zlm_row_buf = Vector{Float64}(undef, (derived.max_l + 1)^2)
-    zlm_dnpl_buf = _alloc_zlm_dnpl_buf(derived.max_l)
+    sph = SphericalHarmonics(derived.max_l)
     local_template, atoms_buf = if energy_kernel === :tensor_template
         tpl = build_local_energy_template(ham)
         (tpl, Vector{Int}(undef, max(derived.max_sites, 1)))
@@ -1491,7 +1496,7 @@ function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{J
     mc = JPhiSpinMC(
         T, ham, spins, energy, cache,
         derived.active_body_indices, derived.active_instance_indices, derived.related_instances_by_atom,
-        derived.max_l, zlm_cache, zlm_row_buf, zlm_dnpl_buf,
+        derived.max_l, zlm_cache, zlm_row_buf, sph,
         Vector{Int}(undef, derived.max_sites), Vector{Int}(undef, derived.max_sites),
         spin_theta_max, renorm_every, sweep_count,
         xml_path, repeat, enabled_bodies,
