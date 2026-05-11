@@ -134,3 +134,71 @@ field type を確定させる。あるいは Carlo アダプタ分離と同時�
 
 候補 A → B → C の順を推奨。実装前に `profiler` エージェントで現状のボトルネックを実測し、
 変更前後で `bccFe 2x2x2` と `ferh 1x1x1` のベンチマークを比較すること。
+
+---
+
+## プロファイル結果（2026-05-11, bcc_2x2x2 + 2x2x2 タイリング, 128原子）
+
+`profiler` エージェントで `:tensor_template` パスを計測。条件：max_l=1、N=2 base instances=88、
+T=0.02585 eV、spin_theta_max=0.5。
+
+### Before / After 比較
+
+「Before」は何も手を入れていない時点。「After」は以下 2 件を適用後：
+
+1. `sweep!` 内の `related_instances = Int[]`（`:tensor_template` パスで未使用）を削除
+2. Magesty.jl の buffered `Zₗₘ_unsafe(l, m, u, buf)` を採用。`JPhiSpinMC` に `zlm_dnpl_buf`
+   フィールド（長さ `max_l+1`）を持たせ、`_update_atom_zlm_cache!` 経由で渡す
+
+| 指標 | Before | After | 変化 |
+|---|---|---|---|
+| sweep（`:tensor_template`, GC 除く） | 57.9 μs | **51.1 μs** | **1.13×** |
+| sweep（`:tensor`） | 69.1 μs | 62.0 μs | 1.11× |
+| allocs/sweep（`:tensor_template`） | 1152 | **0** | 完全消失 |
+| memory/sweep（`:tensor_template`） | 38.9 KB | **0 B** | 完全消失 |
+| GC overhead | 3.1 μs (5.1%) | 0 | 消失 |
+| `_update_atom_zlm_cache!`（128 calls/sweep） | 24.7 μs (43%) | **4.8 μs (9%)** | **5.1×** |
+| `_update_atom_zlm_cache!`（per call） | ~66.7 ns | 37.5 ns | 1.78× |
+
+### After の sweep 内訳（51.1 μs/sweep, allocs 0, GC 0）
+
+| 処理 | 呼び出し回数/sweep | 時間 | 割合 |
+|---|---|---|---|
+| `_tensor_contract_template2_changed!`（テンソル収縮） | 2816 | **23.7 μs** | **46%** |
+| `supercell_atom_index`（mod + 乗算） | 5632 | **14.1 μs** | **28%** |
+| `_update_atom_zlm_cache!` | 128 | 4.8 μs | 9% |
+| ループ・分岐・tile_coords 等の残差 | — | 6.2 μs | 12% |
+| `_propose_spin_geodesic` | 128 | 1.6 μs | 3% |
+| その他（zlm_row_buf コピー, Metropolis rand+exp） | — | 0.9 μs | 2% |
+
+### 残る主要ボトルネックと候補との対応
+
+- **収縮カーネル `_tensor_contract_template2_changed!`（46%）** ← 候補 A・B が対応。
+  特に候補 A（`zlm_cache` レイアウト転置）は数値規約を変えない安全な改善で、
+  内側 SIMD ループの stride を 1 にできるため再優先候補。
+- **`supercell_atom_index` の mod + 乗算（28%）** ← 新規候補（下記「候補F」を追加）。
+  数値結果に影響しないリファクタリングで、`repeat` が小さい本ベンチでは比較的大きな割合を
+  占める。
+
+候補 E（`Zₗₘ_unsafe` のバッファ事前確保）は完了。Magesty.jl 側で API が実装され、
+SpinClusterMC 側で受け取り側を更新済み（commit pending）。
+
+---
+
+## 候補F：`supercell_atom_index` の mod 削減（新規, 28%, 数値不変）
+
+**現状**: `_template_local_energy!` 内で 1 sweep あたり 5632 回 `supercell_atom_index(base_atom,
+ti, tj, tk, base_n_atoms, repeat)` を呼び、その都度 `mod` と乗算でスーパーセル原子インデックスを
+計算している。bcc_2x2x2 + 2x2x2 タイリング系では 14.1 μs/sweep（28%）を占める。
+
+**提案**:
+- (a) `repeat` を `Val{rep}` として伝搬し、`mod` をコンパイル時定数化する。`repeat` のバリエー
+  ションは少数（典型は (2,2,2) や (4,4,4) など固定）なので、一般化と特殊化のバランスを取りやすい。
+- (b) タイル座標 (ti,tj,tk) のループ自体を `_template_local_energy!` の外側に持ち上げ、
+  事前計算したインデックステーブル（`Vector{Int}` of length `n_atoms × max_sites`）を引くだけに
+  する。メモリは増えるが mod が消える。
+
+**期待効果**: 14.1 μs → 数 μs（推定 sweep 全体 1.1〜1.2× 改善）
+**実装規模**: 中。`_template_local_energy!` 周辺と関連ヘルパーの変更が必要。
+**注意**: 数値結果は不変であるべきだが、インデックステーブル方式 (b) はタイリング規約と
+密結合になるため `_foreach_translated_instance` との連動確認が必要（CLAUDE.md「連動箇所」）。

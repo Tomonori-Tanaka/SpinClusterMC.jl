@@ -154,8 +154,9 @@ end
 
             max_l = JMCC._max_l_in_instances(cache.instances)
             zlm = JMCC._alloc_zlm_cache(h.n_atoms, max_l)
+            dnpl_buf = JMCC._alloc_zlm_dnpl_buf(max_l)
             for ia in 1:h.n_atoms
-                JMCC._update_atom_zlm_cache!(zlm, ia, @view(spins[:, ia]), max_l)
+                JMCC._update_atom_zlm_cache!(zlm, ia, @view(spins[:, ia]), max_l, dnpl_buf)
             end
 
             for inst in cache.instances
@@ -175,8 +176,9 @@ end
 
             max_l = JMCC._max_l_in_instances(cache.instances)
             zlm = JMCC._alloc_zlm_cache(h.n_atoms, max_l)
+            dnpl_buf = JMCC._alloc_zlm_dnpl_buf(max_l)
             for ia in 1:h.n_atoms
-                JMCC._update_atom_zlm_cache!(zlm, ia, @view(spins[:, ia]), max_l)
+                JMCC._update_atom_zlm_cache!(zlm, ia, @view(spins[:, ia]), max_l, dnpl_buf)
             end
 
             max_sites = JMCC._max_sites_in_instances(cache.instances)
@@ -204,8 +206,9 @@ end
 
             max_l = JMCC._max_l_in_instances(cache.instances)
             zlm = JMCC._alloc_zlm_cache(h.n_atoms, max_l)
+            dnpl_buf = JMCC._alloc_zlm_dnpl_buf(max_l)
             for ia in 1:h.n_atoms
-                JMCC._update_atom_zlm_cache!(zlm, ia, @view(spins[:, ia]), max_l)
+                JMCC._update_atom_zlm_cache!(zlm, ia, @view(spins[:, ia]), max_l, dnpl_buf)
             end
 
             # active: all body indices
@@ -235,7 +238,7 @@ end
                 spins_new[1, atom] = sx; spins_new[2, atom] = sy; spins_new[3, atom] = sz
 
                 # update zlm
-                JMCC._update_atom_zlm_cache!(zlm, atom, @view(spins_new[:, atom]), max_l)
+                JMCC._update_atom_zlm_cache!(zlm, atom, @view(spins_new[:, atom]), max_l, dnpl_buf)
 
                 E_new_local = sum(
                     cache.instances[idx].prefactor *
@@ -255,7 +258,7 @@ end
                 spins_new[1, atom] = spins[1, atom]
                 spins_new[2, atom] = spins[2, atom]
                 spins_new[3, atom] = spins[3, atom]
-                JMCC._update_atom_zlm_cache!(zlm, atom, @view(spins[:, atom]), max_l)
+                JMCC._update_atom_zlm_cache!(zlm, atom, @view(spins[:, atom]), max_l, dnpl_buf)
             end
         end
 

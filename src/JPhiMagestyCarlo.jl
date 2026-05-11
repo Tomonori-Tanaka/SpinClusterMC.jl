@@ -747,6 +747,10 @@ mutable struct JPhiSpinMC <: AbstractMC
     # Preallocated buffer to save/restore one atom's ZLM row on Metropolis rejection,
     # avoiding recomputation of all (max_l+1)² spherical harmonics for rejected moves.
     zlm_row_buf::Vector{Float64}
+    # Working buffer passed to Magesty's buffered `Zₗₘ_unsafe(l, m, u, buf)` (used by
+    # `LegendrePolynomials.dnPl`). Allocated once with length `max_l + 1`; reusing it
+    # avoids the per-atom-update heap allocation that dominated the sweep hot path.
+    zlm_dnpl_buf::Vector{Float64}
     # Reused in Metropolis sweeps to avoid per-instance allocations in delta energy.
     # (strides and dims are now precomputed in ClusterInstance)
     contract_other_sites::Vector{Int}
@@ -854,6 +858,7 @@ function JPhiSpinMC(params::AbstractDict)
         )
         zlm_cache       = _alloc_zlm_cache(n, max_l)
         zlm_row_buf     = Vector{Float64}(undef, (max_l + 1)^2)
+        zlm_dnpl_buf    = _alloc_zlm_dnpl_buf(max_l)
         other_sites_buf = Vector{Int}(undef, max(max_sites, 1))
         cart_idx_buf    = Vector{Int}(undef, max(max_sites, 1))
         # Build the template eagerly so mc is usable without Carlo.init!
@@ -864,7 +869,7 @@ function JPhiSpinMC(params::AbstractDict)
             T, ham, [zero(SVector{3,Float64}) for _ in 1:n], 0.0,
             stub_cache,
             active_body_indices, Int[], [Int[] for _ in 1:n],
-            max_l, zlm_cache, zlm_row_buf,
+            max_l, zlm_cache, zlm_row_buf, zlm_dnpl_buf,
             other_sites_buf, cart_idx_buf,
             spin_theta_max, renorm_every, 0,
             xml, rep, enabled_bodies, energy_kernel,
@@ -878,6 +883,7 @@ function JPhiSpinMC(params::AbstractDict)
     derived = _get_or_build_derived(xml, rep, active_body_indices, cache, ham.n_atoms)
     zlm_cache = _alloc_zlm_cache(ham.n_atoms, derived.max_l)
     zlm_row_buf = Vector{Float64}(undef, (derived.max_l + 1)^2)
+    zlm_dnpl_buf = _alloc_zlm_dnpl_buf(derived.max_l)
     other_sites_work = Vector{Int}(undef, derived.max_sites)
     cart_idx_work = Vector{Int}(undef, derived.max_sites)
     return JPhiSpinMC(
@@ -892,6 +898,7 @@ function JPhiSpinMC(params::AbstractDict)
         derived.max_l,
         zlm_cache,
         zlm_row_buf,
+        zlm_dnpl_buf,
         other_sites_work,
         cart_idx_work,
         spin_theta_max,
@@ -1012,7 +1019,8 @@ Rebuild the full per-atom `Z_lm` cache from current MC spins.
 """
 function _rebuild_zlm_cache!(mc::JPhiSpinMC)
     @inbounds for atom in 1:mc.ham.n_atoms
-        _update_atom_zlm_cache!(mc.zlm_cache, atom, mc.spins[atom], mc.max_l)
+        _update_atom_zlm_cache!(mc.zlm_cache, atom, mc.spins[atom], mc.max_l,
+                                mc.zlm_dnpl_buf)
     end
     return nothing
 end
@@ -1308,13 +1316,12 @@ function Carlo.sweep!(mc::JPhiSpinMC, ctx::MCContext)
     use_template = mc.energy_kernel === :tensor_template
     @inbounds for _ in 1:n
         i = rand(ctx.rng, 1:n)
-        related_instances = use_template ? Int[] : mc.related_instances_by_atom[i]
 
         E_old_local = if use_template
             _template_local_energy!(mc, i)
         else
             e = 0.0
-            for inst_idx in related_instances
+            for inst_idx in mc.related_instances_by_atom[i]
                 inst = mc.local_cache.instances[inst_idx]
                 e += inst.prefactor * _tensor_contract_instance_cached_changed!(
                     mc.contract_other_sites,
@@ -1341,13 +1348,13 @@ function Carlo.sweep!(mc::JPhiSpinMC, ctx::MCContext)
             zlm_row_buf[j] = mc.zlm_cache[i, j]
         end
         mc.spins[i] = s_new
-        _update_atom_zlm_cache!(mc.zlm_cache, i, s_new, mc.max_l)
+        _update_atom_zlm_cache!(mc.zlm_cache, i, s_new, mc.max_l, mc.zlm_dnpl_buf)
 
         E_new_local = if use_template
             _template_local_energy!(mc, i)
         else
             e = 0.0
-            for inst_idx in related_instances
+            for inst_idx in mc.related_instances_by_atom[i]
                 inst = mc.local_cache.instances[inst_idx]
                 e += inst.prefactor * _tensor_contract_instance_cached_changed!(
                     mc.contract_other_sites,
@@ -1473,6 +1480,7 @@ function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{J
     derived = _get_or_build_derived(xml_path, repeat, active_body_indices, cache, ham.n_atoms)
     zlm_cache = _alloc_zlm_cache(ham.n_atoms, derived.max_l)
     zlm_row_buf = Vector{Float64}(undef, (derived.max_l + 1)^2)
+    zlm_dnpl_buf = _alloc_zlm_dnpl_buf(derived.max_l)
     local_template, atoms_buf = if energy_kernel === :tensor_template
         tpl = build_local_energy_template(ham)
         (tpl, Vector{Int}(undef, max(derived.max_sites, 1)))
@@ -1483,7 +1491,7 @@ function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{J
     mc = JPhiSpinMC(
         T, ham, spins, energy, cache,
         derived.active_body_indices, derived.active_instance_indices, derived.related_instances_by_atom,
-        derived.max_l, zlm_cache, zlm_row_buf,
+        derived.max_l, zlm_cache, zlm_row_buf, zlm_dnpl_buf,
         Vector{Int}(undef, derived.max_sites), Vector{Int}(undef, derived.max_sites),
         spin_theta_max, renorm_every, sweep_count,
         xml_path, repeat, enabled_bodies,

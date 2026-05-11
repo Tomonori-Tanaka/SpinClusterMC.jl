@@ -77,19 +77,28 @@ function _alloc_zlm_cache(n_atoms::Int, max_l::Int)::Matrix{Float64}
     return zeros(Float64, n_atoms, (max_l + 1)^2)
 end
 
+# Buffer passed to Magesty.MySphericalHarmonics.Zₗₘ_unsafe(l, m, u, buf) for
+# `LegendrePolynomials.dnPl`'s working storage. Sized once with `max_l + 1` to cover
+# every `(l, m)` with `l ≤ max_l`. Reusing the buffer eliminates the per-call heap
+# allocation that previously dominated the Metropolis hot path.
+@inline _alloc_zlm_dnpl_buf(max_l::Int)::Vector{Float64} = Vector{Float64}(undef, max_l + 1)
+
 """
-Refresh cached `Z_lm` values for one atom from its current spin.
+Refresh cached `Z_lm` values for one atom from its current spin. `dnpl_buf` is the
+working buffer used by `Zₗₘ_unsafe`'s buffered overload; allocate once per thread via
+`_alloc_zlm_dnpl_buf(max_l)`.
 """
 function _update_atom_zlm_cache!(
     zlm_cache::Matrix{Float64},
     atom::Int,
     u::AbstractVector{<:Real},
     max_l::Int,
+    dnpl_buf::Vector{Float64},
 )
     @inbounds for l in 0:max_l
         @simd for m_idx in 1:(2 * l + 1)
             m = m_idx - l - 1
-            zlm_cache[atom, _zlm_col(l, m_idx)] = Zₗₘ_unsafe(l, m, u)
+            zlm_cache[atom, _zlm_col(l, m_idx)] = Zₗₘ_unsafe(l, m, u, dnpl_buf)
         end
     end
     return nothing
@@ -107,8 +116,10 @@ function _build_zlm_cache(
     n_atoms = _n_spins(spin_directions)
     ncols = (max_l + 1)^2
     zlm_cache = Matrix{Float64}(undef, n_atoms, ncols)
+    dnpl_buf = _alloc_zlm_dnpl_buf(max_l)
     @inbounds for atom in 1:n_atoms
-        _update_atom_zlm_cache!(zlm_cache, atom, _spin_at(spin_directions, atom), max_l)
+        _update_atom_zlm_cache!(zlm_cache, atom, _spin_at(spin_directions, atom),
+                                max_l, dnpl_buf)
     end
     return zlm_cache
 end
