@@ -32,6 +32,14 @@
 
 - ソース・コメント・docstring・コミットメッセージ・PR は英語
   (`feedback_comments_in_english.md`)。`docs/` 配下と会話のみ日本語可。
+- **コミットメッセージは [Conventional Commits](https://www.conventionalcommits.org/) に準拠する**。
+  形式: `<type>(<scope>): <subject>` (scope は省略可)。
+  - 使用する type: `feat` (新機能) / `fix` (バグ修正) / `docs` / `test` / `refactor` /
+    `perf` (性能改善) / `chore` (ビルド・補助ツール等) / `style` (整形のみ)。
+  - subject は命令形・小文字始まり・末尾ピリオドなし (例: `add SCEMC type`)。
+  - 破壊的変更は body に `BREAKING CHANGE: ...` を付ける。
+  - **例外**: spec のマイルストーン完了コミット (`M7:` / `M8:` 等の prefix) は
+    Conventional Commits の対象外として許容する。spec 外の通常コミットは必ず準拠する。
 - **アメリカ英語** で統一する: `normalize` / `normalization` / `behavior` /
   `color` / `center` / `optimize` / `organize` / `favorite` / `canceled` 等。
   British 綴り (`normalise` / `behaviour` 等) を新たに書かない。
