@@ -713,8 +713,8 @@ src/simple/
   bit-level 検証済み (max |Δ| ≤ 3.3e-16, l ≤ 3)。
 
 **決定: (z2) SpheriCart を直接依存**。
-- 最適化版と同じ実装を使うので、CI の「同一 XML + 同一初期スピン → energy 値一致」が
-  bit-level で揃いやすい。
+- 最適化版と同じ実装を使うので、Zlm 単体は bit-exact に揃う。energy は集約順序の
+  違いで bit-exact にはならないが、Zlm が一致する分だけドリフトの解析が容易になる。
 - SpheriCart は `compute(basis, 𝐫)` で **入力の自動正規化** を行う
   (`spherical.jl:55-58`)。non-unit ベクトル入力でも正しく動く（max |Δ| ≤ 1.7e-16）。
   ただしゼロベクトルは l=0 を除き **NaN** を返す。
@@ -725,9 +725,24 @@ src/simple/
   既存最適化版と同じ SpheriCart で揃える方針。「数学ユーティリティとして
   Magesty に揃える」原則の例外だが、CI の数値一致のしやすさを優先。
 
+### CI の数値一致閾値（決定）
+
+simple 版と最適化版は同じ XML / 同じ初期スピンを食わせても、ループ順序とアキュムレータ
+構造が違うので **bit-exact にはならない**（既存の `:tensor` / `:tensor_template` の
+2 パスでも summation order までしか一致しない）。simple 版の目的は「読みやすさ・教材性」で
+あって最適化追従ではないので、bit-exact を要求しない。
+
+既存テストの規約に合わせる:
+
+| 比較 | 規約 | 出処 |
+|---|---|---|
+| `total_energy(simple) ≈ sce_energy(optimized)` | `rtol = 1e-8` | 既存 `sce_energy` ref vs fast (test/runtests.jl:144) |
+| `local_energy_i(simple) ≈ ...(optimized)` | `rtol = 1e-10` | 既存 cached vs ref (test/runtests.jl:165, 194) |
+| `delta_local_energy(simple) ≈ ...(optimized)` | `rtol = 1e-7` | 既存 ΔE consistency (test/runtests.jl:255) |
+| `compute(sph, S)` 出力 (Zlm) | `atol = 0` (bit-exact) | 同じ SpheriCart 呼び出しなので可能 |
+
 ### その他の細かい論点（実装中でも判断可能）
 
-- CI の数値一致閾値（`isapprox` の `rtol`）
 - `enabled_bodies` field の要否（最適化版にあるが simple 版で必要かは実装してから判断）
 
 ### コーディング方針: 数式を含む docstring（決定）
