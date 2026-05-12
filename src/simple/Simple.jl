@@ -14,5 +14,6 @@ include("types.jl")
 include("cg.jl")
 include("energy.jl")
 include("external.jl")
+include("spin_proposal.jl")
 
 end

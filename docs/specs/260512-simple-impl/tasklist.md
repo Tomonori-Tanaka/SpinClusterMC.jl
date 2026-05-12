@@ -68,13 +68,15 @@ Claude Code 内蔵の TaskCreate で管理し、ここには反映しない。�
 - Zeeman: `E = -Σ_i m_i (B · S_i)`
 - 単位は積 `m_i · B` が eV になるよう呼び出し側で揃える
 
-### M6. Spin proposal + initial spins
-- [ ] `src/simple/spin_proposal.jl`:
-  - [ ] `_rand_unit_spin(rng)`
-  - [ ] `_propose_spin_geodesic(rng, ux, uy, uz, theta_max)`
-  - [ ] `init_spins(params, n_atoms, base_n_atoms)`: `:initial_spins` を型 dispatch
-        (Symbol `:random` / `:ferromagnetic`, Tuple, SVector, Matrix (base or supercell))
-- [ ] テスト: `test/simple/test_simple_spin_proposal.jl` (各モード × normalize 確認)
+### M6. Spin proposal + initial spins (完了: 2026-05-12)
+- [x] `src/simple/spin_proposal.jl`:
+  - [x] `_rand_unit_spin(rng)` — `SVector{3, Float64}` 返し (optimized 側 Tuple とは別物)
+  - [x] `_propose_spin_geodesic(rng, u, theta_max)` — SVector 入出力、θmax=0 で early return
+  - [x] `init_spins(spec, n_atoms, base_n_atoms; rng)`: Symbol / Tuple /
+        AbstractVector / AbstractMatrix (base or supercell) / AbstractDict
+        の multi-dispatch、`n_atoms == base_n_atoms` のとき as-is 優先
+- [x] テスト: `test/simple/test_simple_spin_proposal.jl` (各モード × normalize 確認 +
+      geodesic stays-on-sphere + θmax 上限尊重 + validation)
 
 ### M7. MC 型 + Carlo glue
 - [ ] `src/simple/mc.jl`:
