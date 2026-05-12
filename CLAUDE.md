@@ -38,9 +38,18 @@
 
 これらを誤解すると無言でバグが埋まるので、アルゴリズムを触る前に確認すること。
 
-- **温度の単位**: `T` はeV。コード中に `kB` は現れない。Metropolis採択確率は `exp(-ΔE/T)` をそのまま使う。ケルビンから変換する場合は呼び出し側で `T_eV = kB * T_K` を行う。
-- **スピン行列のレイアウト**: `spins` は `3 × n_atoms`（行 = x,y,z、列 = 原子）。転置すると全計算が壊れる。
-- **`:Energy` 観測量は per atom**: `measure!` が記録する `:Energy` は `E / n_atoms`。比熱・感受率の式もこれを前提にしている。
+- **温度の単位**: 計算経路 (energy math, Metropolis 採択 `exp(-ΔE/T)`, `register_evaluables` の `T²` など) では `T` は **eV**。`kB` は計算経路には現れない。
+  - **API 境界では Kelvin で受け取って変換してよい**。例: `Simple.SCEMC` は `params[:T]::Real` を Kelvin で受け、constructor で `BOLTZMANN_EV_PER_KELVIN ≈ 8.6173e-5 eV/K` を掛けて内部 `mc.T` (eV) に変換する。境界より内側はすべて eV。
+  - 既存 `JPhiSpinMC` (optimized) は `params[:T]` を eV で受け取る古い API。Simple とは異なる規約なので注意。
+- **スピン行列のレイアウト**: `spins` は `3 × n_atoms`（行 = x,y,z、列 = 原子）。転置すると全計算が壊れる。`spins[:, i]` は **大きさ 1 の古典スピン方向ベクトル**。物理的な磁気モーメント `μ_i = m_i · S_i` は別概念で、`m_i` は `MomentModel` (`UniformMoment` / `PerSiteMoment` 等) が保持する。
+- **`:Energy` / `:Magnetization` 観測量は per atom**: `measure!` が記録するのは:
+  - `:Energy = E_total / n_atoms` (eV/atom)
+  - `:Magnetization = |m|`, `:Magnetization2 = |m|²`, `:Magnetization4 = |m|⁴` ただし `m = (1/n_atoms) Σ_i S_i`。
+    - `S_i` は単位ベクトル (古典スピンの**方向**) なので、`|m| ∈ [0, 1]` の **無次元秩序変数**。
+    - **磁気モーメントの大きさ `m_i` は含まれない**。副格子で異なるモーメント (Fe vs Rh など) は反映されないし、Bohr magneton 単位の物理磁化 `M_phys = (1/n) Σ_i m_i S_i` とは別物。
+    - 実際の `M_phys` や副格子磁化を欲しい場合は `params[:extra_measure]` callback で計算する。
+
+  比熱 (`n · σ²(E) / T²`), Binder 比 (`⟨m²⟩² / ⟨m⁴⟩`), 感受率 (`n · ⟨m²⟩ / T`) の式はいずれもこの per-atom 無次元秩序変数を前提にしている。SI 単位の磁気感受率ではない。
 - **球面調和関数は実数（テッサー型）**: `zlm_cache` は複素 `Ylm` ではなく実 `Zlm`。キャッシュの列数は `(l_max+1)²`（`sum_{l=0}^{L}(2l+1) = (L+1)²` による全(l,m)ペアの合計）。
 - **`Φᵥ` の定義はMagesty.jl側**: SALCの構成・CG係数の規約はこのリポジトリに書かれていない。変更前は必ず[Magesty.jl technical notes](https://Tomonori-Tanaka.github.io/Magesty.jl/technical_notes/)を参照すること。
 
