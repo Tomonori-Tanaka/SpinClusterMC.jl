@@ -128,15 +128,29 @@ Claude Code 内蔵の TaskCreate で管理し、ここには反映しない。�
 - 温度単位: `params[:T]` は Kelvin (constructor で eV 変換) を全 example で踏襲。
 - output ファイル (`cooling_results.csv` 等) は `.gitignore` で除外。
 
-### M9. Benchmark
-- [ ] `benchmark/simple/fixtures.jl` (3 fixture ロード共通化)
-- [ ] `benchmark/simple/bench_construction.jl` (XML / CG / Hamiltonian)
-- [ ] `benchmark/simple/bench_energy.jl` (total / local / delta_local / gradient)
-- [ ] `benchmark/simple/bench_sweep.jl` (metropolis_sweep! + per-flip)
-- [ ] `benchmark/simple/bench_compare.jl` (simple vs optimized 比率)
-- [ ] `benchmark/simple/runbench.jl` (集約サマリ)
-- [ ] `benchmark/simple/README.md`
-- [ ] **G8**: `benchmark/README.md` (parent) を新規作成、`optimized/` と `simple/` の関係を 1 段上から説明
+### M9. Benchmark (完了: 2026-05-13)
+- [x] `benchmark/simple/fixtures.jl` (3 fixture ロード共通化 + `simple_avg_time` warm-up)
+- [x] `benchmark/simple/bench_construction.jl` (XML / CG / Hamiltonian)
+- [x] `benchmark/simple/bench_energy.jl` (total / local / delta_local / gradient)
+- [x] `benchmark/simple/bench_sweep.jl` (metropolis_sweep! + per-flip)
+- [x] `benchmark/simple/bench_compare.jl` (simple vs optimized: `sce_energy` reference
+      と `_energy_from_instances_cached` production fast path の両方と比較、rel-err も出力)
+- [x] `benchmark/simple/runbench.jl` (各 bench を個別 Julia process で連続実行、`--fast` で軽量)
+- [x] `benchmark/simple/README.md`
+- [x] **G8**: `benchmark/README.md` (parent) を新規作成、`optimized/` と `simple/` の
+      使い分けを表形式で説明
+
+設計判断:
+- BenchmarkTools 非依存 (optimized 側のスタイルに合わせて `@elapsed` + checksum)
+- 共通 helper を `fixtures.jl` に集約: `SIMPLE_FIXTURES`, `simple_parse_args`,
+  `simple_parse_repeat`, `simple_random_spins`, `simple_fmt_time`, `simple_avg_time`
+- `simple_avg_time` は最初に 1 回 untimed warm-up を実行 (closure-specialization 等の
+  初期コストを timed loop から除外)
+- 各スクリプトの fixture loop ヘルパーは `bench_fixture(xml, repeat, ...)` で統一
+- `bench_compare.jl` の cached path は `_build_zlm_cache` の re-build を毎回含めて測る
+  (`Carlo.init!` 内の実コストと同じ)
+- ferh は `bench_sweep` / `bench_compare` のデフォルトから除外 (`--fixtures=ferh` で
+  個別指定可)。理由: 839 936 cluster instances + Simple 側 SH cache 未実装で時間がかかる。
 
 ### M10. 完了確認
 - [ ] requirements.md の「完了基準」全項目クリア
