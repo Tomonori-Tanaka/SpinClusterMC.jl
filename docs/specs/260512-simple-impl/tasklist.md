@@ -16,24 +16,24 @@ Claude Code 内蔵の TaskCreate で管理し、ここには反映しない。�
 
 ## マイルストーン
 
-### M1. プロジェクト骨格
-- [ ] `src/simple/Simple.jl` (サブモジュールのスケルトン: `module Simple` + 後続 include は空)
-- [ ] `src/SpinClusterMC.jl` を更新:
+### M1. プロジェクト骨格 (完了: 2026-05-12)
+- [x] `src/simple/Simple.jl` (サブモジュールのスケルトン: `module Simple` + 後続 include は空)
+- [x] `src/SpinClusterMC.jl` を更新:
       ```julia
       include("simple/Simple.jl")
       using .Simple
       export JPhiMagestyCarlo, Simple
       ```
-- [ ] 空 module でも `make test` が通る (precompile が壊れていないことの確認)
-- [ ] `julia --project=. -e 'using SpinClusterMC.Simple'` がエラーなく走る
+- [x] 空 module でも `make test` が通る (precompile が壊れていないことの確認)
+- [x] `julia --project=. -e 'using SpinClusterMC.Simple'` がエラーなく走る
 
-### M2. XML parser
-- [ ] `src/simple/xml_io.jl` (独立 parser: SALC list, basis, JPhi)
-- [ ] `bcc_2x2x2 / fege_2x2x2 / ferh_4x4x4` の XML を読んで `parse_jphi_xml` が
+### M2. XML parser (完了: 2026-05-12)
+- [x] `src/simple/xml_io.jl` (独立 parser: SALC list, basis, JPhi)
+- [x] `bcc_2x2x2 / fege_2x2x2 / ferh_4x4x4` の XML を読んで `parse_jphi_xml` が
       ClusterInstance 候補のデータを返せる (型は M3 まで暫定)
-- [ ] 既存 `src/xml_io.jl` の `parse_system_xml` 相当を simple 側で書き直し
+- [x] 既存 `src/xml_io.jl` の `parse_system_xml` 相当を simple 側で書き直し
       (system.xml の lattice/positions/translations)
-- [ ] テスト: `test/simple/test_simple_xml.jl` (3 fixture 全部ロード成功)
+- [x] テスト: `test/simple/test_simple_xml.jl` (3 fixture 全部ロード成功)
 
 ### M3. 型 + CGTable
 - [ ] `src/simple/types.jl` (`SpinClusterHamiltonian`, `ClusterInstance`, `CGTable`)
