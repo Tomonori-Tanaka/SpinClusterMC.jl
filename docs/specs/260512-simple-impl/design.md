@@ -396,11 +396,12 @@ src/simple/
 
 ---
 
-## 明日詰める論点（2026-05-12 時点）
+## 着手前に最終確認した決定（2026-05-12）
 
-着手前に解像度を上げたい3点。調査結果は揃っていて、最終判断のみ残っている。
+ブレスト段階で解像度を上げきれていなかった 3 点 + 周辺事項を、調査結果を踏まえて
+最終判断したもの。すべて確定済み。
 
-## (1) Spin proposal の規約（決定: 既存規約踏襲, default `renorm_every=1000`）
+### (1) Spin proposal の規約（決定: 既存規約踏襲, default `renorm_every=1000`）
 
 **調査結果**:
 - 既存 (src/spin_utils.jl): `_rand_unit_spin(rng)`（球面一様）と
@@ -464,7 +465,7 @@ src/simple/
   は実装側で気にする必要なし。ただしゼロ入力だけは事前に弾く（既存実装の
   `nrm < 1e-14 then fallback to random unit` 規約を踏襲）。
 
-## (2) `<basis Lseq>` の規約と CG path 抽出（決定: Magesty に合わせて `Lseq`）
+### (2) `<basis Lseq>` の規約と CG path 抽出（決定: Magesty に合わせて `Lseq`）
 
 **調査結果**:
 - Magesty 型 `CoupledBasis` の assertion (types/Basis.jl:62-63):
@@ -489,7 +490,7 @@ src/simple/
   実装時に CGTable のキー長 invariant `length(Lseq) == N - 2` をコンストラクタで
   assert する。
 
-## (3) Zlm 計算の出処（決定: SpheriCart）
+### (3) Zlm 計算の出処（決定: SpheriCart）
 
 **調査結果**:
 - `Magesty.MySphericalHarmonics.Zₗₘ_unsafe(l, m, uvec)::Float64` が export されている
@@ -511,7 +512,7 @@ src/simple/
   既存最適化版と同じ SpheriCart で揃える方針。「数学ユーティリティとして
   Magesty に揃える」原則の例外だが、CI の数値一致のしやすさを優先。
 
-## CI の数値一致閾値（決定）
+### (4) CI の数値一致閾値（決定）
 
 simple 版と最適化版は同じ XML / 同じ初期スピンを食わせても、ループ順序とアキュムレータ
 構造が違うので **bit-exact にはならない**（既存の `:tensor` / `:tensor_template` の
@@ -527,9 +528,10 @@ simple 版と最適化版は同じ XML / 同じ初期スピンを食わせても
 | `delta_local_energy(simple) ≈ ...(optimized)` | `rtol = 1e-7` | 既存 ΔE consistency (test/runtests.jl:255) |
 | `compute(sph, S)` 出力 (Zlm) | `atol = 0` (bit-exact) | 同じ SpheriCart 呼び出しなので可能 |
 
-## その他の細かい論点（実装中でも判断可能）
+### 実装中に判断する事項
 
-- `enabled_bodies` field の要否（最適化版にあるが simple 版で必要かは実装してから判断）
+- `enabled_bodies` field の要否（最適化版にあるが simple 版で必要かは実装してから判断）。
+  判断トリガは M7 (`mc.jl` 着手時) — tasklist.md 参照。
 
 ## コーディング方針: 数式を含む docstring（決定）
 

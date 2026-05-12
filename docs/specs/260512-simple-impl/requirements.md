@@ -62,6 +62,20 @@
   - スピン行列レイアウトは `3 × n_atoms`。
   - `:Energy` 観測量は per atom (`E / n_atoms`)。
   - 球面調和関数は実 (tesseral) Zlm、NOT 複素 Ylm。
+- **観測量の規約 (既存 `JPhiSpinMC` と揃える)**:
+  - 平均スピンベクトル `m = sum(spins) / n_atoms`、その大きさ `|m| = norm(m)`。
+  - `measure!` で記録する 4 観測量:
+    - `:Magnetization`: `|m|`
+    - `:AbsMagnetization`: `|m|` (PT/post-processing 互換のため同値を別キーで)
+    - `:Magnetization2`: `|m|²`
+    - `:Magnetization4`: `|m|⁴`
+  - `:Energy` / `:Energy2` も per-atom (`E / n_atoms`, `(E / n_atoms)²`) で記録。
+  - `register_evaluables` で派生量を出す:
+    - `:SpecificHeat = n_atoms · (⟨E²⟩ - ⟨E⟩²) / T²` (`:Energy`, `:Energy2` 入力)
+    - `:BinderRatio = ⟨m²⟩² / ⟨m⁴⟩`
+    - `:Susceptibility = n_atoms · ⟨m²⟩ / T`
+  - 副格子磁化等の系依存観測量は `params[:extra_measure]` / `params[:extra_evaluables]`
+    callback でユーザー側が追加 (design.md `measure! の拡張ポリシー` 節)。
 - **依存**: 親パッケージの依存 (Carlo, MPI, HDF5, EzXML, StaticArrays) を共有。
   Zlm 計算は SpheriCart を直接使用。CG 計算は `Magesty.AngularMomentumCoupling`
   に依存 (tesseral 位相補償付き Racah CG)。それ以外の Magesty 機能には依存しない。
@@ -86,6 +100,8 @@
 | `local_energy` | `rtol = 1e-10` |
 | `delta_local_energy` (ΔE) | `rtol = 1e-7` |
 | Zlm 出力 (`compute(sph, S)`) | `atol = 0` (bit-exact) |
+| `:Magnetization` 系列 (同 seed, 同 sweeps) | `rtol = 1e-8` |
+| `:SpecificHeat` / `:BinderRatio` / `:Susceptibility` (同 seed, 同 sweeps) | `rtol = 1e-7` |
 
 これらは既存テストの規約 (test/runtests.jl:144, 165, 194, 255) と整合させる。
 bit-exact なエネルギー一致は要求しない (両実装で和の集約順序が異なるため)。

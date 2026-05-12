@@ -8,12 +8,24 @@
 Claude Code 内蔵の TaskCreate で管理し、ここには反映しない。完了したマイルストーンは
 `- [x]` でチェックし、完了日を併記する。
 
+## テストファイルの配置規約
+
+- `test/simple/` — Simple 版固有のテスト (XML parser, CG, energy 内部一致 など)
+- `test/parity/` — simple vs optimized の数値一致テスト
+- `test/runtests.jl` から両者を include。slow gate (`"slow" in ARGS`) は `ferh_4x4x4` のみ。
+
 ## マイルストーン
 
 ### M1. プロジェクト骨格
-- [ ] `src/simple/Simple.jl` (サブモジュールのスケルトン: `module Simple` + `include`s + `export`)
-- [ ] `src/SpinClusterMC.jl` から `include("simple/Simple.jl")` を追加し、`using .Simple` だけ済ませる (export はしない、`SpinClusterMC.Simple.xxx` 経由でアクセス)
+- [ ] `src/simple/Simple.jl` (サブモジュールのスケルトン: `module Simple` + 後続 include は空)
+- [ ] `src/SpinClusterMC.jl` を更新:
+      ```julia
+      include("simple/Simple.jl")
+      using .Simple
+      export JPhiMagestyCarlo, Simple
+      ```
 - [ ] 空 module でも `make test` が通る (precompile が壊れていないことの確認)
+- [ ] `julia --project=. -e 'using SpinClusterMC.Simple'` がエラーなく走る
 
 ### M2. XML parser
 - [ ] `src/simple/xml_io.jl` (独立 parser: SALC list, basis, JPhi)
@@ -21,12 +33,17 @@ Claude Code 内蔵の TaskCreate で管理し、ここには反映しない。�
       ClusterInstance 候補のデータを返せる (型は M3 まで暫定)
 - [ ] 既存 `src/xml_io.jl` の `parse_system_xml` 相当を simple 側で書き直し
       (system.xml の lattice/positions/translations)
+- [ ] テスト: `test/simple/test_simple_xml.jl` (3 fixture 全部ロード成功)
 
 ### M3. 型 + CGTable
 - [ ] `src/simple/types.jl` (`SpinClusterHamiltonian`, `ClusterInstance`, `CGTable`)
 - [ ] `src/simple/cg.jl` (CGTable 構築: `Magesty.AngularMomentumCoupling.build_all_real_bases`
       を unique `ls` ごとに 1 回呼ぶ)
 - [ ] CGTable のキー長 invariant `length(Lseq) == N - 2` をコンストラクタで assert
+- [ ] **G9 判断**: `Magesty.AngularMomentumCoupling` API (`build_all_real_bases`,
+      `enumerate_paths_left_all`) のシグネチャを確認。`Project.toml` の `Magesty = "0.1.0"`
+      で固定されているが互換性に懸念があれば user に相談。
+- [ ] テスト: `test/simple/test_simple_cg.jl` (CGTable shape 確認、Magesty 直叩きとの一致)
 
 ### M4. Energy API
 - [ ] `src/simple/energy.jl` の以下 4 関数:
@@ -35,11 +52,14 @@ Claude Code 内蔵の TaskCreate で管理し、ここには反映しない。�
   - [ ] `delta_local_energy(h, spins, i, S_new)`
   - [ ] `gradient(h, spins, i)`
 - [ ] 数式を実装する関数の docstring に LaTeX 数式 + Magesty docs 参照を入れる
-- [ ] テスト: 同 XML + 同 spins で `total_energy(simple) ≈ sce_energy(optimized) rtol=1e-8`
+- [ ] テスト: `test/simple/test_simple_energy.jl` (total = sum(local) / N の内部一致、
+      gradient の数値微分一致)
+- [ ] テスト: `test/parity/test_parity_bcc.jl` (`rtol = 1e-8` for total, `1e-10` for local)
 
 ### M5. 外場
 - [ ] `src/simple/external.jl` (`ExternalTerm` 抽象 + `Zeeman` 実装)
 - [ ] `ExternalTerm` も `local_energy / delta_local_energy / gradient` を実装
+- [ ] テスト: `test/simple/test_simple_external.jl` (Zeeman の `gradient = -B` 等)
 
 ### M6. Spin proposal + initial spins
 - [ ] `src/simple/spin_proposal.jl`:
@@ -47,19 +67,24 @@ Claude Code 内蔵の TaskCreate で管理し、ここには反映しない。�
   - [ ] `_propose_spin_geodesic(rng, ux, uy, uz, theta_max)`
   - [ ] `init_spins(params, n_atoms, base_n_atoms)`: `:initial_spins` を型 dispatch
         (Symbol `:random` / `:ferromagnetic`, Tuple, SVector, Matrix (base or supercell))
-- [ ] テスト: 各 initial_spins モードで `Carlo.init!` が正常に動く
+- [ ] テスト: `test/simple/test_simple_spin_proposal.jl` (各モード × normalize 確認)
 
 ### M7. MC 型 + Carlo glue
 - [ ] `src/simple/mc.jl`:
   - [ ] `mutable struct SCEMC <: Carlo.AbstractMC`
   - [ ] `Carlo.init!`, `Carlo.measure!`, `Carlo.register_evaluables`
+        (Magnetization 4 観測量 + Energy/Energy2 + 派生は requirements.md 参照)
   - [ ] `extra_measure` / `extra_evaluables` callback
   - [ ] PT 後付け可能な field 配置 (T mutable, energy field, xml_path, repeat 保持)
 - [ ] `src/simple/updates/metropolis.jl` (`metropolis_sweep!`)
 - [ ] `Carlo.sweep!` から `params[:update_scheme]` で dispatch
 - [ ] 周期的 renormalization (`renorm_every`, default 1000)
-- [ ] テスト: 短い MC run (seed 固定) で `:Energy` 系列が optimized 版と
-      `rtol=1e-8` で一致
+- [ ] **G4 判断**: `enabled_bodies` field を入れるかを user に確認。
+  - 入れる場合: 既存 JPhiSpinMC と同じ `params[:enabled_bodies]` 規約。
+  - 入れない場合: 初版非サポートと design.md / requirements.md に明記、parity テストは
+    `params[:enabled_bodies] => nothing` でのみ実施。
+- [ ] テスト: `test/simple/test_simple_mc.jl` (init + 1 sweep が走る)
+- [ ] テスト: `test/parity/test_parity_fege.jl` (異方性込み、`rtol = 1e-8`)
 
 ### M8. Examples
 - [ ] `examples/01_quickstart.jl` (bcc_2x2x2)
@@ -68,7 +93,8 @@ Claude Code 内蔵の TaskCreate で管理し、ここには反映しない。�
 - [ ] `examples/04_initial_spin_presets.jl` (`:random` / `:ferromagnetic` / SVector / Matrix)
 - [ ] `examples/05_custom_observable.jl` (ferh_4x4x4, Fe/Rh 副格子磁化を callback で追加)
 - [ ] `examples/README.md` (30 秒 quickstart + 30 分読む順序)
-- [ ] CI smoke test (短時間 example のみ)
+- [ ] **G7**: CI smoke test を組み込み。`Makefile` に `make examples-smoke` を追加し
+      短時間 example (01, 04 等) のみ実行。`.github/workflows/CI.yml` に step 追加。
 
 ### M9. Benchmark
 - [ ] `benchmark/simple/fixtures.jl` (3 fixture ロード共通化)
@@ -78,12 +104,17 @@ Claude Code 内蔵の TaskCreate で管理し、ここには反映しない。�
 - [ ] `benchmark/simple/bench_compare.jl` (simple vs optimized 比率)
 - [ ] `benchmark/simple/runbench.jl` (集約サマリ)
 - [ ] `benchmark/simple/README.md`
+- [ ] **G8**: `benchmark/README.md` (parent) を新規作成、`optimized/` と `simple/` の関係を 1 段上から説明
 
 ### M10. 完了確認
 - [ ] requirements.md の「完了基準」全項目クリア
+- [ ] テスト: `test/parity/test_parity_ferh.jl` を追加し `make test-slow` で通過
 - [ ] `make test` 通過 (slow テスト含む)
 - [ ] `parity-checker` サブエージェント (保留中だが、ここまで来たら導入を再検討)
 - [ ] design_notes.md の simple-impl pointer を「完了」マーク付きに更新
+- [ ] **G6**: `CLAUDE.md` の `make test ~10s` を実態 (推定 50〜90s) に更新。slow test 規約は維持。
+- [ ] **G10**: `docs/src/api.md` に `## Simple Module` セクションを追加し、
+      `using Documenter; @docs` で Simple 版の公開 API を出力。
 
 ## メモ
 
@@ -93,3 +124,4 @@ Claude Code 内蔵の TaskCreate で管理し、ここには反映しない。�
 - M8〜M9 は M7 後にまとめて。
 - 各マイルストーン完了時に **テストが通ること**を確認してから次へ進む。
 - 中規模以上の判断 (e.g., `enabled_bodies` の要否) はその場で design.md に追記する。
+- ギャップ監査 (2026-05-12) の出処は `/Users/tomorin/.claude/plans/distributed-fluttering-robin.md`。
