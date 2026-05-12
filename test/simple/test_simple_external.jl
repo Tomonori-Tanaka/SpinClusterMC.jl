@@ -155,6 +155,41 @@ end
     end
 end
 
+@testset "Zeeman: unit=:tesla converts to eV/μ_B internally" begin
+    # 1 Tesla along +z, paired with a 1 μ_B uniform moment, should give
+    # E_per_atom = -μ_B · B = -5.7883818060e-5 eV per spin perfectly aligned.
+    rng = MersenneTwister(7)
+    n_atoms = 4
+    spins = _rand_unit_spins(rng, n_atoms)
+
+    field_T = [0.0, 0.0, 1.0]
+    z_T = SIMPLE.Zeeman(field_T; unit = :tesla)
+    z_eV = SIMPLE.Zeeman(
+        field_T .* SIMPLE.BOHR_MAGNETON_EV_PER_TESLA; unit = :eV_per_muB
+    )
+
+    # The :tesla path is mathematically equivalent to pre-converting and
+    # passing :eV_per_muB (which is the default).
+    @test z_T.field ≈ z_eV.field rtol = 1.0e-14
+    @test SIMPLE.total_energy(z_T, spins) ≈
+          SIMPLE.total_energy(z_eV, spins) rtol = 1.0e-14
+
+    # Fully aligned spins with 1 μ_B moment in 1 T field: E = -μ_B · 1 T per
+    # atom = -BOHR_MAGNETON_EV_PER_TESLA per atom.
+    aligned = zeros(3, n_atoms)
+    aligned[3, :] .= 1.0
+    @test SIMPLE.total_energy(z_T, aligned) ≈
+          -n_atoms * SIMPLE.BOHR_MAGNETON_EV_PER_TESLA rtol = 1.0e-14
+
+    # Fe / Rh sublattices: per-atom contribution scales with the moment.
+    moments = [2.2, 0.5, 2.2, 0.5]
+    z_sub = SIMPLE.Zeeman(
+        [0.0, 0.0, 1.0]; unit = :tesla, moments = SIMPLE.PerSiteMoment(moments)
+    )
+    expected = -SIMPLE.BOHR_MAGNETON_EV_PER_TESLA * sum(moments)
+    @test SIMPLE.total_energy(z_sub, aligned) ≈ expected rtol = 1.0e-14
+end
+
 @testset "Zeeman / MomentModel argument validation" begin
     rng = MersenneTwister(4)
     spins = _rand_unit_spins(rng, 4)
@@ -180,4 +215,7 @@ end
 
     # S_new must have length 3.
     @test_throws ArgumentError SIMPLE.delta_local_energy(z, spins, 1, [1.0, 0.0])
+
+    # Invalid unit kwarg.
+    @test_throws ArgumentError SIMPLE.Zeeman([0.0, 0.0, 1.0]; unit = :gauss)
 end

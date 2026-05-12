@@ -125,33 +125,51 @@ atom `i`.
 abstract type ExternalTerm end
 
 """
-    Zeeman(field::AbstractVector{<:Real}; moments=UniformMoment(1.0)) <: ExternalTerm
+Bohr magneton in eV per Tesla: `μ_B / e = ℏ / (2 m_e) ≈ 5.7883818060e-5 eV/T`.
+Used to convert `Zeeman` field inputs given in Tesla to the internal
+eV/μ_B representation.
+"""
+const BOHR_MAGNETON_EV_PER_TESLA = 5.7883818060e-5
+
+"""
+    Zeeman(field; unit=:eV_per_muB, moments=UniformMoment(1.0)) <: ExternalTerm
 
 Zeeman coupling with energy
 
     E_Zeeman = - Σ_i m_i (field · S_i)
 
-where `m_i = moment_at(moments, i, spins)`. The energy is minimised when
-each spin aligns with `field`. The product `m_i · field` must come out in
-eV (the unit used throughout this package). Choose units of `field` and
-`moments` so they multiply to eV — for example, `moments` in `μ_B` and
-`field` in `eV/μ_B`. Kelvin-to-eV conversion for the temperature `T` is the
-caller's responsibility and does not affect this term.
+where `m_i = moment_at(moments, i, spins)` and the *internal* field is in
+`eV/μ_B`. The energy is minimised when each spin aligns with `field`.
+
+# Field-unit options
+
+- `unit = :eV_per_muB` (default) — `field` components are already in
+  `eV/μ_B`. Pair with `moments` in `μ_B`.
+- `unit = :tesla` — `field` components are in Tesla. Internally multiplied
+  by `BOHR_MAGNETON_EV_PER_TESLA ≈ 5.7884e-5 eV/(T·μ_B)`. Pair with
+  `moments` in `μ_B`; the product gives an eV energy.
+
+Both modes assume `moments` are in `μ_B`. To work in a different unit
+system supply pre-converted numbers and use `:eV_per_muB`.
 
 # Fields
 
-- `field::SVector{3, Float64}` — Cartesian components of the external field.
-- `moments::MomentModel` — site-resolved magnitudes (see `MomentModel`).
+- `field::SVector{3, Float64}` — internal field in `eV/μ_B` (after any
+  conversion from the constructor's `unit` argument).
+- `moments::MomentModel` — site-resolved magnitudes; see `MomentModel`.
 
 # Examples
 
 ```julia
-# Uniform field along +z, all atoms with unit moment.
-z = Zeeman([0.0, 0.0, 0.1])
-
-# Two sublattices with different moments (e.g., Fe = 2.2 μB, Rh = 0.5 μB).
+# 1 Tesla along +z, Fe (2.2 μ_B) / Rh (0.5 μ_B) sublattices.
 moments = PerSiteMoment([i ≤ n_Fe ? 2.2 : 0.5 for i in 1:n_atoms])
-z = Zeeman([0.0, 0.0, 0.1]; moments)
+z = Zeeman([0.0, 0.0, 1.0]; unit=:tesla, moments)
+
+# Already in eV/μ_B (default).
+z = Zeeman([0.0, 0.0, 5.7884e-5]; moments)   # equivalent to 1 T
+
+# Uniform field, unit moment, no extra setup.
+z = Zeeman([0.0, 0.0, 0.1])                  # 0.1 eV per unit-spin
 ```
 """
 struct Zeeman{M <: MomentModel} <: ExternalTerm
@@ -160,11 +178,27 @@ struct Zeeman{M <: MomentModel} <: ExternalTerm
 end
 
 function Zeeman(
-        field::AbstractVector{<:Real}; moments::MomentModel = UniformMoment(1.0)
+        field::AbstractVector{<:Real};
+        unit::Symbol = :eV_per_muB,
+        moments::MomentModel = UniformMoment(1.0)
 )
     length(field) == 3 ||
         throw(ArgumentError("Zeeman field must have length 3; got $(length(field))"))
-    return Zeeman(SVector{3, Float64}(field[1], field[2], field[3]), moments)
+    scale = if unit === :eV_per_muB
+        1.0
+    elseif unit === :tesla
+        BOHR_MAGNETON_EV_PER_TESLA
+    else
+        throw(
+            ArgumentError(
+            "Zeeman unit must be :eV_per_muB or :tesla; got :$(unit)"
+        )
+        )
+    end
+    return Zeeman(
+        SVector{3, Float64}(field[1] * scale, field[2] * scale, field[3] * scale),
+        moments
+    )
 end
 
 function _validate_external_spins(spins::AbstractMatrix{<:Real})
