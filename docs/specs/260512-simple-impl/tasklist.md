@@ -35,15 +35,14 @@ Claude Code 内蔵の TaskCreate で管理し、ここには反映しない。�
       (system.xml の lattice/positions/translations)
 - [x] テスト: `test/simple/test_simple_xml.jl` (3 fixture 全部ロード成功)
 
-### M3. 型 + CGTable
-- [ ] `src/simple/types.jl` (`SpinClusterHamiltonian`, `ClusterInstance`, `CGTable`)
-- [ ] `src/simple/cg.jl` (CGTable 構築: `Magesty.AngularMomentumCoupling.build_all_real_bases`
+### M3. 型 + CGTable (完了: 2026-05-12)
+- [x] `src/simple/types.jl` (`SpinClusterHamiltonian`, `ClusterInstance`, `CGTable`)
+- [x] `src/simple/cg.jl` (CGTable 構築: `Magesty.AngularMomentumCoupling.build_all_real_bases`
       を unique `ls` ごとに 1 回呼ぶ)
-- [ ] CGTable のキー長 invariant `length(Lseq) == N - 2` をコンストラクタで assert
-- [ ] **G9 判断**: `Magesty.AngularMomentumCoupling` API (`build_all_real_bases`,
-      `enumerate_paths_left_all`) のシグネチャを確認。`Project.toml` の `Magesty = "0.1.0"`
-      で固定されているが互換性に懸念があれば user に相談。
-- [ ] テスト: `test/simple/test_simple_cg.jl` (CGTable shape 確認、Magesty 直叩きとの一致)
+- [x] CGTable のキー長 invariant `length(Lseq) == max(0, N-2)` をコンストラクタで assert
+- [x] **G9 判断**: `Magesty.AngularMomentumCoupling` API (`build_all_real_bases`,
+      `enumerate_paths_left_all`) のシグネチャを確認 (`Magesty = "0.1.0"` で互換 OK)
+- [x] テスト: `test/simple/test_simple_cg.jl` (CGTable shape 確認、Magesty 直叩きとの一致)
 
 ### M4. Energy API
 - [ ] `src/simple/energy.jl` の以下 4 関数:
