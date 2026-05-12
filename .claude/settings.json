@@ -8,7 +8,10 @@
       "Bash(julia --project=. -e 'using Pkg; Pkg.test\\(\\)')",
       "Bash(julia --project=. -e 'using SpinClusterMC; println\\(\"load OK\"\\)')",
       "Bash(julia --project=. -e 'using SpinClusterMC.JPhiMagestyCarlo; println\\(\"OK\"\\)')",
-      "Bash(julia --project=. -e 'using SpinClusterMC; using SpinClusterMC.JPhiMagestyCarlo; println\\(\"OK\"\\)')"
+      "Bash(julia --project=. -e 'using SpinClusterMC; using SpinClusterMC.JPhiMagestyCarlo; println\\(\"OK\"\\)')",
+      "Bash(make test)",
+      "Bash(make test:*)",
+      "Bash(make test-slow)"
     ]
   },
   "hooks": {
