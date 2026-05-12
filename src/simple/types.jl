@@ -182,12 +182,18 @@ from a Magesty `jphi.xml` and a tile factor `repeat`.
   atom indices rewritten as supercell indices.
 - `cg_table`: Tesseral CG tensors keyed by `(ls, Lf, Lseq)`, looked up at
   energy-evaluation time.
+- `max_l`: Largest `ls[i]` seen across all instances. Drives the SpheriCart
+  spherical-harmonics calculator dimension `(max_l + 1)^2`.
+- `atom_to_instance_indices`: For each supercell atom `i`, the list of
+  `instances` indices whose `atoms` contains `i`. Used by `local_energy` and
+  `delta_local_energy` to scan only clusters touching the site of interest.
 
 # Construction
 
 `SpinClusterHamiltonian(xml_path; repeat=(1,1,1))` runs the parser, the
 supercell geometry build, the instance generation, and the CG-table build in
-that order.
+that order, then derives `max_l` and `atom_to_instance_indices` from the
+instance list.
 """
 struct SpinClusterHamiltonian
     n_atoms::Int
@@ -197,6 +203,8 @@ struct SpinClusterHamiltonian
     pos_frac::Matrix{Float64}
     instances::Vector{ClusterInstance}
     cg_table::CGTable
+    max_l::Int
+    atom_to_instance_indices::Vector{Vector{Int}}
 end
 
 @inline function _supercell_atom_index(
@@ -241,12 +249,22 @@ function _build_supercell_geometry(
     return lattice_super, pos_super
 end
 
-# Replicate each <basis> across every translation column of map_sym, then
-# across every tile of the supercell. Returns a flat ClusterInstance list.
+# Replicate each <basis> across every translation column of map_sym and every
+# tile of the supercell, then deduplicate so each physical cluster appears
+# exactly once. Multiplicity stays on the kept instance.
+#
+# Matches `JPhiMagestyCarlo._foreach_translated_instance` (per-cbc):
+# - For each tile `(ti, tj, tk)` and each translation `t`, map the base atoms
+#   to their supercell image, with an integer wrap so basis bonds that cross
+#   a base-cell boundary land in the adjacent tile.
+# - Drop any translated atom set whose (sorted-atoms, ls) signature has
+#   already been seen for this basis. Different bases may legitimately
+#   produce the same physical cluster, so the Set is per-basis, not global.
 function _generate_instances(
         salcs::AbstractVector{SALCData},
         jphi::AbstractVector{Float64},
         map_sym::AbstractMatrix{Int},
+        base_pos_frac::AbstractMatrix{Float64},
         base_n::Int,
         repeat::NTuple{3, Int}
 )::Vector{ClusterInstance}
@@ -256,11 +274,30 @@ function _generate_instances(
     for (s, salc) in enumerate(salcs)
         J = jphi[s]
         for basis in salc.bases
-            for t in 1:n_trans
-                base_atoms = [map_sym[a, t] for a in basis.atoms]
-                for tk in 0:(n3 - 1), tj in 0:(n2 - 1), ti in 0:(n1 - 1)
-                    super_atoms = [_supercell_atom_index(a, ti, tj, tk, base_n, repeat)
-                                   for a in base_atoms]
+            ls_v = collect(Int, basis.ls)
+            seen = Set{Tuple{Vector{Int}, Vector{Int}}}()
+            for tk in 0:(n3 - 1), tj in 0:(n2 - 1), ti in 0:(n1 - 1)
+                for t in 1:n_trans
+                    translated_base = [map_sym[a, t] for a in basis.atoms]
+                    p_ref = @view base_pos_frac[:, translated_base[1]]
+                    super_atoms = Vector{Int}(undef, length(translated_base))
+                    for (k, ba) in enumerate(translated_base)
+                        p = @view base_pos_frac[:, ba]
+                        w1 = round(Int, p[1] - p_ref[1])
+                        w2 = round(Int, p[2] - p_ref[2])
+                        w3 = round(Int, p[3] - p_ref[3])
+                        super_atoms[k] = _supercell_atom_index(
+                            ba,
+                            mod(ti + w1, n1),
+                            mod(tj + w2, n2),
+                            mod(tk + w3, n3),
+                            base_n,
+                            repeat
+                        )
+                    end
+                    key = (sort(super_atoms), ls_v)
+                    key in seen && continue
+                    push!(seen, key)
                     push!(
                         instances,
                         ClusterInstance(
@@ -303,9 +340,11 @@ function SpinClusterHamiltonian(
         data.system.lattice, data.system.pos_frac, base_n, repeat
     )
     instances = _generate_instances(
-        data.salcs, data.jphi, data.system.map_sym, base_n, repeat
+        data.salcs, data.jphi, data.system.map_sym, data.system.pos_frac, base_n, repeat
     )
     cg_table = build_cg_table(data.salcs)
+    max_l = _max_l_in_instances(instances)
+    atom_to_instance_indices = _build_atom_to_instance_indices(instances, n_super)
     return SpinClusterHamiltonian(
         n_super,
         base_n,
@@ -313,6 +352,37 @@ function SpinClusterHamiltonian(
         lattice_super,
         pos_super,
         instances,
-        cg_table
+        cg_table,
+        max_l,
+        atom_to_instance_indices
     )
+end
+
+# Largest `ls[i]` seen across all cluster instances. Used to size the
+# SpheriCart spherical-harmonics calculator: it must hold up to (max_l+1)^2
+# tesseral basis functions per atom.
+function _max_l_in_instances(instances::AbstractVector{ClusterInstance})::Int
+    m = 0
+    for inst in instances
+        for l in inst.ls
+            l > m && (m = l)
+        end
+    end
+    return m
+end
+
+# For each atom `i` in 1..n_atoms, list of indices into `instances` for which
+# `i ∈ instances[idx].atoms`. Built once at construction; queried per
+# `local_energy` / `delta_local_energy` call so those scan only clusters that
+# touch the site of interest.
+function _build_atom_to_instance_indices(
+        instances::AbstractVector{ClusterInstance}, n_atoms::Int
+)::Vector{Vector{Int}}
+    mapping = [Int[] for _ in 1:n_atoms]
+    for (idx, inst) in enumerate(instances)
+        for a in inst.atoms
+            push!(mapping[a], idx)
+        end
+    end
+    return mapping
 end

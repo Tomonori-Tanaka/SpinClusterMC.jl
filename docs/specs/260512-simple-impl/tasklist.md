@@ -44,16 +44,16 @@ Claude Code 内蔵の TaskCreate で管理し、ここには反映しない。�
       `enumerate_paths_left_all`) のシグネチャを確認 (`Magesty = "0.1.0"` で互換 OK)
 - [x] テスト: `test/simple/test_simple_cg.jl` (CGTable shape 確認、Magesty 直叩きとの一致)
 
-### M4. Energy API
-- [ ] `src/simple/energy.jl` の以下 4 関数:
-  - [ ] `total_energy(h, spins)`
-  - [ ] `local_energy(h, spins, i)`
-  - [ ] `delta_local_energy(h, spins, i, S_new)`
-  - [ ] `gradient(h, spins, i)`
-- [ ] 数式を実装する関数の docstring に LaTeX 数式 + Magesty docs 参照を入れる
-- [ ] テスト: `test/simple/test_simple_energy.jl` (total = sum(local) / N の内部一致、
+### M4. Energy API (完了: 2026-05-12)
+- [x] `src/simple/energy.jl` の以下 4 関数:
+  - [x] `total_energy(h, spins)`
+  - [x] `local_energy(h, spins, i)`
+  - [x] `delta_local_energy(h, spins, i, S_new)`
+  - [x] `gradient(h, spins, i)`
+- [x] 数式を実装する関数の docstring に LaTeX 数式 + Magesty docs 参照を入れる
+- [x] テスト: `test/simple/test_simple_energy.jl` (total = sum(local) / N の内部一致、
       gradient の数値微分一致)
-- [ ] テスト: `test/parity/test_parity_bcc.jl` (`rtol = 1e-8` for total, `1e-10` for local)
+- [x] テスト: `test/parity/test_parity_bcc.jl` (`rtol = 1e-8` for total, `1e-7` for delta)
 
 ### M5. 外場
 - [ ] `src/simple/external.jl` (`ExternalTerm` 抽象 + `Zeeman` 実装)

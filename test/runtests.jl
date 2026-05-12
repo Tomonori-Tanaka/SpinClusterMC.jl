@@ -481,6 +481,8 @@ end
     # Simple submodule tests (independent reference implementation).
     include("simple/test_simple_xml.jl")
     include("simple/test_simple_cg.jl")
+    include("simple/test_simple_energy.jl")
+    include("parity/test_parity_bcc.jl")
 
     if isfile(joinpath(@__DIR__, "fege_2x2x2", "jphi.xml"))
         include("fege_2x2x2/test_fege_2x2x2.jl")

@@ -227,3 +227,15 @@ design・要件・タスクは spec フォルダに移動済み:
 - [requirements.md](specs/260512-simple-impl/requirements.md) — 目的・不変条件・完了基準
 - [design.md](specs/260512-simple-impl/design.md) — モジュール構成・API・型・規約・ベンチマーク方針
 - [tasklist.md](specs/260512-simple-impl/tasklist.md) — マイルストーン
+
+### simple/ の future-work メモ
+
+将来 MC ループ内で `delta_local_energy` を高頻度に呼ぶ場面で重要になる項目を
+ここに溜める (M9 ベンチで定量化後に対処する想定):
+
+- **`SphericalHarmonics(h.max_l)` の使い回し**: 現在 `total_energy / local_energy /
+  delta_local_energy / gradient` の各関数冒頭で都度生成している (`src/simple/energy.jl`)。
+  Simple 版は legibility 優先のため都度生成しているが、内部 factorial precomputation の
+  コストが per-sweep の delta-E 呼び出しに乗ると無視できなくなる。`SpinClusterHamiltonian`
+  に opaque field として保持するか、energy module 内に lazy-init するか。Carlo の MC 型
+  (M7) に保持させるのが最もスコープが狭くて良さそう。
