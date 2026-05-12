@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(julia --project=. -e ' *)",
+      "Bash(julia --project=. -e 'import Pkg; Pkg.instantiate\\(\\)')",
+      "Bash(julia --project=. -e 'import Pkg; Pkg.resolve\\(\\)')",
+      "Bash(julia --project=. -e 'import Pkg; Pkg.test\\(\\)')",
+      "Bash(julia --project=. -e 'using Pkg; Pkg.test\\(\\)')",
+      "Bash(julia --project=. -e 'using SpinClusterMC; println\\(\"load OK\"\\)')",
+      "Bash(julia --project=. -e 'using SpinClusterMC.JPhiMagestyCarlo; println\\(\"OK\"\\)')",
+      "Bash(julia --project=. -e 'using SpinClusterMC; using SpinClusterMC.JPhiMagestyCarlo; println\\(\"OK\"\\)')"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/no-japanese.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/no-git-push.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
