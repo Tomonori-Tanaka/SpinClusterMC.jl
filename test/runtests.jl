@@ -478,6 +478,9 @@ end
 
     include("bcc_2x2x2/test_bcc_2x2x2.jl")
 
+    # Simple submodule tests (independent reference implementation).
+    include("simple/test_simple_xml.jl")
+
     if isfile(joinpath(@__DIR__, "fege_2x2x2", "jphi.xml"))
         include("fege_2x2x2/test_fege_2x2x2.jl")
     else
@@ -500,7 +503,11 @@ end
         import JET
         result = JET.report_package(
             SpinClusterMC;
-            target_modules = (SpinClusterMC, SpinClusterMC.JPhiMagestyCarlo),
+            target_modules = (
+                SpinClusterMC,
+                SpinClusterMC.JPhiMagestyCarlo,
+                SpinClusterMC.Simple,
+            ),
         )
         reports = JET.get_reports(result)
         for r in reports
