@@ -167,33 +167,74 @@ Base.keys(t::CGTable) = keys(t.entries)
 """
     SpinClusterHamiltonian
 
-Full description of the SCE Hamiltonian held by the Monte Carlo engine. Built
-from a Magesty `jphi.xml` and a tile factor `repeat`.
+The central data object of the Simple submodule. Carries everything the energy
+code (`total_energy`, `local_energy`, `delta_local_energy`, `gradient`) needs
+to evaluate the SCE Hamiltonian on a given spin configuration.
 
-# Fields
+Built from a Magesty `jphi.xml` (which defines the *base cell* and its SALCs)
+and an optional tile factor `repeat` (which builds a *supercell* by stacking
+the base cell). See `docs/terminology.md` for the base / primitive / supercell
+distinction.
 
-- `n_atoms`: Total atom count of the supercell (`base_n_atoms * prod(repeat)`).
-- `base_n_atoms`: Atom count of the XML (base) cell.
-- `repeat`: Tile factors along the three lattice directions `(n1, n2, n3)`.
-- `lattice`: 3×3 supercell lattice matrix; columns are `n_k * a_k`.
-- `pos_frac`: 3×n_atoms fractional positions in the supercell.
-- `instances`: All translated cluster terms. Every base-cell `<basis>` is
-  replicated once per translation column of `map_sym` and once per tile, with
-  atom indices rewritten as supercell indices.
-- `cg_table`: Tesseral CG tensors keyed by `(ls, Lf, Lseq)`, looked up at
-  energy-evaluation time.
-- `max_l`: Largest `ls[i]` seen across all instances. Drives the SpheriCart
-  spherical-harmonics calculator dimension `(max_l + 1)^2`.
-- `atom_to_instance_indices`: For each supercell atom `i`, the list of
-  `instances` indices whose `atoms` contains `i`. Used by `local_energy` and
-  `delta_local_energy` to scan only clusters touching the site of interest.
+# Cell geometry
+
+Let `a_1, a_2, a_3 ∈ ℝ³` be the base-cell lattice vectors read from the XML
+(columns of `data.system.lattice`), and `(n_1, n_2, n_3) = repeat` be the tile
+factors. The supercell is the parallelepiped spanned by
+
+    A_k = n_k · a_k         (k = 1, 2, 3)
+
+For `repeat == (1, 1, 1)` the supercell equals the base cell; in particular
+`n_atoms == base_n_atoms` and `lattice == data.system.lattice`.
+
+# Sizes
+
+- `n_atoms::Int` — total atom count of the supercell, equal to
+  `base_n_atoms · n_1 · n_2 · n_3`.
+- `base_n_atoms::Int` — atom count of the base cell (`<NumberOfAtoms>` in
+  the XML).
+- `repeat::NTuple{3,Int}` — tile factors `(n_1, n_2, n_3)` along the three
+  base-lattice directions. `(1, 1, 1)` means "no tiling — supercell equals
+  base cell". All entries must be `≥ 1`; enforced by the outer constructor.
+
+# Geometry
+
+- `lattice::Matrix{Float64}` *(3×3)* — supercell lattice vectors as columns:
+  `lattice[:, k] = n_k · a_k` for `k ∈ {1, 2, 3}`, where `a_k` is the base
+  lattice vector from the XML. Units follow the XML (typically Å).
+- `pos_frac::Matrix{Float64}` *(3 × n_atoms)* — atomic positions in
+  **supercell-fractional coordinates** (column per atom, each entry in
+  `[0, 1)`). The Cartesian position of atom `i` is `lattice * pos_frac[:, i]`.
+
+# Hamiltonian content
+
+- `instances::Vector{ClusterInstance}` — every translated cluster term that
+  contributes to the energy. The XML's `<basis>` elements are replicated
+  across every translation of `map_sym` and every tile, with atom indices
+  rewritten to `1..n_atoms`. Per-basis deduplication drops translations that
+  produce the same physical cluster (same sorted atoms + same `ls`);
+  multiplicity stays on the surviving instance. See `_generate_instances`.
+- `cg_table::CGTable` — read-only lookup of tesseral Clebsch-Gordan tensors
+  keyed by `(ls, Lf, Lseq)`. The energy code fetches `T_real` from here
+  rather than rebuilding it per cluster.
+
+# Caches derived from `instances` (constructor-filled; treat as read-only)
+
+- `max_l::Int` — largest single-site angular momentum across all instances,
+  `max(inst.ls[k])`. Sets the SpheriCart calculator dimension to
+  `(max_l + 1)^2`.
+- `atom_to_instance_indices::Vector{Vector{Int}}` *(length n_atoms)* —
+  `atom_to_instance_indices[i]` is the list of indices into `instances`
+  for which `i ∈ instances[idx].atoms`. `local_energy`,
+  `delta_local_energy`, and `gradient` use it to scan only the clusters
+  that touch site `i` instead of the whole list.
 
 # Construction
 
-`SpinClusterHamiltonian(xml_path; repeat=(1,1,1))` runs the parser, the
-supercell geometry build, the instance generation, and the CG-table build in
-that order, then derives `max_l` and `atom_to_instance_indices` from the
-instance list.
+`SpinClusterHamiltonian(xml_path::AbstractString; repeat=(1,1,1))` runs, in
+order: `parse_jphi_xml` → `_build_supercell_geometry` →
+`_generate_instances` → `build_cg_table` → cache derivation
+(`max_l`, `atom_to_instance_indices`).
 """
 struct SpinClusterHamiltonian
     n_atoms::Int
