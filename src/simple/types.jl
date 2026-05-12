@@ -176,35 +176,28 @@ and an optional tile factor `repeat` (which builds a *supercell* by stacking
 the base cell). See `docs/terminology.md` for the base / primitive / supercell
 distinction.
 
-# Cell geometry
+Geometry note
+-------------
 
-Let `a_1, a_2, a_3 ∈ ℝ³` be the base-cell lattice vectors read from the XML
-(columns of `data.system.lattice`), and `(n_1, n_2, n_3) = repeat` be the tile
-factors. The supercell is the parallelepiped spanned by
-
-    A_k = n_k · a_k         (k = 1, 2, 3)
-
-For `repeat == (1, 1, 1)` the supercell equals the base cell; in particular
-`n_atoms == base_n_atoms` and `lattice == data.system.lattice`.
+This type deliberately does *not* carry the lattice vectors or the
+supercell-fractional positions. The energy code does not read them — every
+cluster term refers to atoms by their integer supercell index, and the
+spherical harmonics are evaluated on the *spin direction*, never on a real-
+space position. Geometry is only consumed during construction, in
+`_generate_instances`, where the base-cell `pos_frac` from the parser is used
+to compute inter-tile wraps. If a downstream extension (a position-dependent
+external term, structure-factor observable, visualization) needs lattice or
+positions, it should reload them from the XML or carry them itself.
 
 # Sizes
 
 - `n_atoms::Int` — total atom count of the supercell, equal to
-  `base_n_atoms · n_1 · n_2 · n_3`.
+  `base_n_atoms · n_1 · n_2 · n_3` where `(n_1, n_2, n_3) = repeat`.
 - `base_n_atoms::Int` — atom count of the base cell (`<NumberOfAtoms>` in
   the XML).
 - `repeat::NTuple{3,Int}` — tile factors `(n_1, n_2, n_3)` along the three
   base-lattice directions. `(1, 1, 1)` means "no tiling — supercell equals
   base cell". All entries must be `≥ 1`; enforced by the outer constructor.
-
-# Geometry
-
-- `lattice::Matrix{Float64}` *(3×3)* — supercell lattice vectors as columns:
-  `lattice[:, k] = n_k · a_k` for `k ∈ {1, 2, 3}`, where `a_k` is the base
-  lattice vector from the XML. Units follow the XML (typically Å).
-- `pos_frac::Matrix{Float64}` *(3 × n_atoms)* — atomic positions in
-  **supercell-fractional coordinates** (column per atom, each entry in
-  `[0, 1)`). The Cartesian position of atom `i` is `lattice * pos_frac[:, i]`.
 
 # Hamiltonian content
 
@@ -232,16 +225,13 @@ For `repeat == (1, 1, 1)` the supercell equals the base cell; in particular
 # Construction
 
 `SpinClusterHamiltonian(xml_path::AbstractString; repeat=(1,1,1))` runs, in
-order: `parse_jphi_xml` → `_build_supercell_geometry` →
-`_generate_instances` → `build_cg_table` → cache derivation
-(`max_l`, `atom_to_instance_indices`).
+order: `parse_jphi_xml` → `_generate_instances` → `build_cg_table` →
+cache derivation (`max_l`, `atom_to_instance_indices`).
 """
 struct SpinClusterHamiltonian
     n_atoms::Int
     base_n_atoms::Int
     repeat::NTuple{3, Int}
-    lattice::Matrix{Float64}
-    pos_frac::Matrix{Float64}
     instances::Vector{ClusterInstance}
     cg_table::CGTable
     max_l::Int
@@ -262,32 +252,6 @@ end
     (0 ≤ ti < n1 && 0 ≤ tj < n2 && 0 ≤ tk < n3) ||
         throw(ArgumentError("tile ($ti,$tj,$tk) out of range for repeat=$repeat"))
     return base_atom + base_n * (ti + n1 * tj + n1 * n2 * tk)
-end
-
-# Build supercell lattice and wrapped fractional positions by tiling the base
-# cell. Independent of the optimized-side `_build_supercell_geometry` so the
-# Simple file stays self-contained.
-function _build_supercell_geometry(
-        lattice::AbstractMatrix{<:Real},
-        pos_base_frac::AbstractMatrix{<:Real},
-        base_n::Int,
-        repeat::NTuple{3, Int}
-)
-    n1, n2, n3 = repeat
-    a1 = lattice[:, 1]
-    a2 = lattice[:, 2]
-    a3 = lattice[:, 3]
-    lattice_super = hcat(n1 .* a1, n2 .* a2, n3 .* a3)
-    n_tot = base_n * n1 * n2 * n3
-    pos_super = zeros(3, n_tot)
-    for tk in 0:(n3 - 1), tj in 0:(n2 - 1), ti in 0:(n1 - 1), b in 1:base_n
-        ia = _supercell_atom_index(b, ti, tj, tk, base_n, repeat)
-        r = lattice * pos_base_frac[:, b] .+ ti .* a1 .+ tj .* a2 .+ tk .* a3
-        x = lattice_super \ r
-        x .-= floor.(x)
-        pos_super[:, ia] .= x
-    end
-    return lattice_super, pos_super
 end
 
 # Replicate each <basis> across every translation column of map_sym and every
@@ -362,8 +326,8 @@ end
     SpinClusterHamiltonian(xml_path; repeat=(1, 1, 1)) -> SpinClusterHamiltonian
 
 Load a Magesty `jphi.xml` and build the full Hamiltonian: parse the XML,
-construct the supercell geometry, generate one `ClusterInstance` per
-`(SALC basis, translation, tile)` triple, and build the tesseral CG table.
+generate one `ClusterInstance` per `(SALC basis, translation, tile)` triple
+(with per-basis deduplication), and build the tesseral CG table.
 """
 function SpinClusterHamiltonian(
         xml_path::AbstractString;
@@ -376,10 +340,6 @@ function SpinClusterHamiltonian(
     base_n = data.system.n_atoms
     n1, n2, n3 = repeat
     n_super = base_n * n1 * n2 * n3
-    lattice_super,
-    pos_super = _build_supercell_geometry(
-        data.system.lattice, data.system.pos_frac, base_n, repeat
-    )
     instances = _generate_instances(
         data.salcs, data.jphi, data.system.map_sym, data.system.pos_frac, base_n, repeat
     )
@@ -390,8 +350,6 @@ function SpinClusterHamiltonian(
         n_super,
         base_n,
         repeat,
-        lattice_super,
-        pos_super,
         instances,
         cg_table,
         max_l,

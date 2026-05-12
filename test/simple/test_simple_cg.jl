@@ -25,8 +25,6 @@ const CG_FIXTURES = [
             @test h.n_atoms == fix.n_atoms
             @test h.base_n_atoms == fix.n_atoms
             @test h.repeat == (1, 1, 1)
-            @test size(h.lattice) == (3, 3)
-            @test size(h.pos_frac) == (3, fix.n_atoms)
             @test !isempty(h.instances)
             # Every instance's atom set must point inside the supercell.
             @test all(
