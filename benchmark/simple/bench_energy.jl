@@ -33,21 +33,21 @@ using StaticArrays: SVector
 using SpinClusterMC
 using SpinClusterMC.Simple
 
-include(joinpath(@__DIR__, "fixtures.jl"))
+include(joinpath(@__DIR__, "..", "bench_helpers.jl"))
 
 function bench_fixture(
         xml::AbstractString, repeat::NTuple{3, Int}, seed::Int; seconds::Real,
     )
     h = SpinClusterHamiltonian(xml; repeat = repeat)
     rng = MersenneTwister(seed)
-    spins = simple_random_spins(rng, h.n_atoms)
+    spins = random_unit_spins(rng, h.n_atoms)
     site = 1
     S_new = SVector{3, Float64}(0.0, 0.0, 1.0)
 
-    r_total = simple_bench(() -> total_energy(h, spins);                    seconds = seconds)
-    r_local = simple_bench(() -> local_energy(h, spins, site);              seconds = seconds)
-    r_delta = simple_bench(() -> delta_local_energy(h, spins, site, S_new); seconds = seconds)
-    r_grad  = simple_bench(() -> gradient(h, spins, site);                  seconds = seconds)
+    r_total = run_bench(() -> total_energy(h, spins);                    seconds = seconds)
+    r_local = run_bench(() -> local_energy(h, spins, site);              seconds = seconds)
+    r_delta = run_bench(() -> delta_local_energy(h, spins, site, S_new); seconds = seconds)
+    r_grad  = run_bench(() -> gradient(h, spins, site);                  seconds = seconds)
 
     return (;
         xml,
@@ -65,10 +65,10 @@ function main()
         "seconds"  => "1.0",
         "seed"     => "42",
     )
-    opts = merge(defaults, simple_parse_args(ARGS))
+    opts = merge(defaults, parse_kv_args(ARGS))
 
     names   = [Symbol(strip(s)) for s in split(opts["fixtures"], ",")]
-    repeat  = simple_parse_repeat(opts["repeat"])
+    repeat  = parse_repeat_csv(opts["repeat"])
     seconds = parse(Float64, opts["seconds"])
     seed    = parse(Int, opts["seed"])
     seconds > 0 || error("seconds must be > 0, got: $seconds")
@@ -82,9 +82,9 @@ function main()
 
     results = []
     for name in names
-        haskey(SIMPLE_FIXTURES, name) ||
-            error("unknown fixture $(name); choose from $(keys(SIMPLE_FIXTURES))")
-        xml = getproperty(SIMPLE_FIXTURES, name)
+        haskey(FIXTURES, name) ||
+            error("unknown fixture $(name); choose from $(keys(FIXTURES))")
+        xml = getproperty(FIXTURES, name)
         print("$(rpad(string(name), 5)) ... ")
         flush(stdout)
         r = bench_fixture(xml, repeat, seed; seconds = seconds)
@@ -114,10 +114,10 @@ function main()
         )
             @printf("%-6s %-9s %-12s %-12s %-10d %-10s\n",
                 string(r.name), op,
-                simple_fmt_time(br.t_min),
-                simple_fmt_time(br.t_median),
+                fmt_time(br.t_min),
+                fmt_time(br.t_median),
                 br.allocs,
-                simple_fmt_bytes(br.memory),
+                fmt_bytes(br.memory),
             )
         end
     end

@@ -1,31 +1,29 @@
-# Shared helpers for benchmark/simple/*.jl. Not a public API.
+# Shared helpers for benchmark/{optimized,simple}/*.jl. Not a public API.
 #
-# Each script in this directory `include`s this file to share:
+# Each script in either subtree `include`s this file to share:
 #   - Fixture paths (bcc_2x2x2, fege_2x2x2, ferh_4x4x4)
-#   - Argument parsing (matching benchmark/optimized/ style)
-#   - Random unit-spin generator and a time formatter
-#   - A thin `simple_bench(expr)` wrapper around BenchmarkTools that
-#     prints min, median, allocations, and memory in a uniform way.
+#   - Argument parsing
+#   - Random unit-spin generator and time/byte formatters
+#   - A thin `run_bench(expr)` wrapper around BenchmarkTools that
+#     returns a `BenchResult` (min/median time + allocations + memory)
 #
-# The bench scripts use BenchmarkTools (not just `@elapsed`) because
-# Simple is now the basis for performance work, and we need per-call
-# allocation tracking and statistical timing to identify bottlenecks.
-# See benchmark/Project.toml for the env this depends on.
+# Both bench trees activate the same Pkg env (benchmark/Project.toml)
+# so this file's `using` directives resolve uniformly.
 
 using BenchmarkTools: BenchmarkTools, @benchmarkable, run, minimum, median
 using Random: AbstractRNG, MersenneTwister
 using LinearAlgebra: norm
 
-const SIMPLE_FIXTURE_ROOT = abspath(joinpath(@__DIR__, "..", "..", "test"))
+const FIXTURE_ROOT = abspath(joinpath(@__DIR__, "..", "test"))
 
-const SIMPLE_FIXTURES = (
-    bcc  = joinpath(SIMPLE_FIXTURE_ROOT, "bcc_2x2x2",  "jphi.xml"),
-    fege = joinpath(SIMPLE_FIXTURE_ROOT, "fege_2x2x2", "jphi.xml"),
-    ferh = joinpath(SIMPLE_FIXTURE_ROOT, "ferh_4x4x4", "jphi.xml"),
+const FIXTURES = (
+    bcc  = joinpath(FIXTURE_ROOT, "bcc_2x2x2",  "jphi.xml"),
+    fege = joinpath(FIXTURE_ROOT, "fege_2x2x2", "jphi.xml"),
+    ferh = joinpath(FIXTURE_ROOT, "ferh_4x4x4", "jphi.xml"),
 )
 
 "Parse `--key=value` CLI args into `Dict{String,String}`."
-function simple_parse_args(args)
+function parse_kv_args(args)
     opts = Dict{String, String}()
     for a in args
         startswith(a, "--") || error("unknown argument format: $a")
@@ -37,7 +35,7 @@ function simple_parse_args(args)
 end
 
 "Parse a `n1,n2,n3` triple of positive integers."
-function simple_parse_repeat(s::AbstractString)::NTuple{3, Int}
+function parse_repeat_csv(s::AbstractString)::NTuple{3, Int}
     parts = split(s, ",")
     length(parts) == 3 || error("repeat must be n1,n2,n3, got: $s")
     vals = parse.(Int, strip.(parts))
@@ -46,7 +44,7 @@ function simple_parse_repeat(s::AbstractString)::NTuple{3, Int}
 end
 
 "Random `3 × n` matrix of unit-length spin directions."
-function simple_random_spins(rng::AbstractRNG, n::Int)::Matrix{Float64}
+function random_unit_spins(rng::AbstractRNG, n::Int)::Matrix{Float64}
     spins = randn(rng, 3, n)
     for i in 1:n
         spins[:, i] ./= norm(@view spins[:, i])
@@ -55,7 +53,7 @@ function simple_random_spins(rng::AbstractRNG, n::Int)::Matrix{Float64}
 end
 
 "Format a wall-clock duration (seconds) into a human-readable string."
-function simple_fmt_time(s::Real)
+function fmt_time(s::Real)
     s < 1e-6 && return string(round(s * 1e9; digits = 1), " ns")
     s < 1e-3 && return string(round(s * 1e6; digits = 2), " µs")
     s < 1.0  && return string(round(s * 1e3; digits = 2), " ms")
@@ -64,7 +62,7 @@ function simple_fmt_time(s::Real)
 end
 
 "Format a byte count into a human-readable string."
-function simple_fmt_bytes(b::Real)
+function fmt_bytes(b::Real)
     b < 1024              && return string(round(Int, b), " B")
     b < 1024^2            && return string(round(b / 1024;     digits = 1), " KiB")
     b < 1024^3            && return string(round(b / 1024^2;   digits = 1), " MiB")
@@ -86,18 +84,19 @@ struct BenchResult
 end
 
 """
-    simple_bench(f; samples=..., seconds=...) -> BenchResult
+    run_bench(f; seconds=1.0, samples=10_000) -> BenchResult
 
 Run `f` under `BenchmarkTools.@benchmarkable` and return a `BenchResult`.
 `f` must be a zero-arg closure (typically `() -> work(args...)`); we wrap
 it that way so the closure-specialization cost is paid once at definition
 time rather than inside the timed loop.
 
-`seconds` caps the total wall-clock budget (default 1.0s); large benches
-should bump it so BenchmarkTools collects enough samples for a stable
-median.
+`seconds` is the BenchmarkTools per-bench wall-clock cap. BenchmarkTools
+collects samples until either `seconds` elapses or `samples` count is
+hit, then returns min/median over them. Large benches should bump
+`seconds` so the median has enough samples to stabilize.
 """
-function simple_bench(f; seconds::Real = 1.0, samples::Int = 10_000)
+function run_bench(f; seconds::Real = 1.0, samples::Int = 10_000)
     # No `evals=` here; let `tune!` choose the per-sample eval count so
     # sub-µs ops don't floor at the timer resolution.
     bm = @benchmarkable ($f)() samples=samples seconds=seconds
@@ -106,8 +105,8 @@ function simple_bench(f; seconds::Real = 1.0, samples::Int = 10_000)
     tmin  = minimum(trial)
     tmed  = median(trial)
     return BenchResult(
-        BenchmarkTools.time(tmin)    / 1e9,
-        BenchmarkTools.time(tmed)    / 1e9,
+        BenchmarkTools.time(tmin)   / 1e9,
+        BenchmarkTools.time(tmed)   / 1e9,
         BenchmarkTools.allocs(tmin),
         BenchmarkTools.memory(tmin),
         length(trial.times),

@@ -28,16 +28,16 @@ using Printf
 using SpinClusterMC
 using SpinClusterMC.Simple
 
-include(joinpath(@__DIR__, "fixtures.jl"))
+include(joinpath(@__DIR__, "..", "bench_helpers.jl"))
 
 function bench_fixture(xml::AbstractString, repeat::NTuple{3, Int}; seconds::Real)
     # Inspect a sample build so we can print shape info alongside timings.
     h0 = SpinClusterHamiltonian(xml; repeat = repeat)
     data = Simple.parse_jphi_xml(xml)
 
-    r_total = simple_bench(() -> SpinClusterHamiltonian(xml; repeat = repeat); seconds = seconds)
-    r_parse = simple_bench(() -> Simple.parse_jphi_xml(xml);                   seconds = seconds)
-    r_cg    = simple_bench(() -> Simple.build_cg_table(data.salcs);            seconds = seconds)
+    r_total = run_bench(() -> SpinClusterHamiltonian(xml; repeat = repeat); seconds = seconds)
+    r_parse = run_bench(() -> Simple.parse_jphi_xml(xml);                   seconds = seconds)
+    r_cg    = run_bench(() -> Simple.build_cg_table(data.salcs);            seconds = seconds)
 
     return (;
         xml,
@@ -56,10 +56,10 @@ function main()
         "repeat"   => "1,1,1",
         "seconds"  => "1.0",
     )
-    opts = merge(defaults, simple_parse_args(ARGS))
+    opts = merge(defaults, parse_kv_args(ARGS))
 
     names   = [Symbol(strip(s)) for s in split(opts["fixtures"], ",")]
-    repeat  = simple_parse_repeat(opts["repeat"])
+    repeat  = parse_repeat_csv(opts["repeat"])
     seconds = parse(Float64, opts["seconds"])
     seconds > 0 || error("seconds must be > 0, got: $seconds")
 
@@ -71,9 +71,9 @@ function main()
 
     results = []
     for name in names
-        haskey(SIMPLE_FIXTURES, name) ||
-            error("unknown fixture $(name); choose from $(keys(SIMPLE_FIXTURES))")
-        xml = getproperty(SIMPLE_FIXTURES, name)
+        haskey(FIXTURES, name) ||
+            error("unknown fixture $(name); choose from $(keys(FIXTURES))")
+        xml = getproperty(FIXTURES, name)
         print("$(rpad(string(name), 5)) ... ")
         flush(stdout)
         r = bench_fixture(xml, repeat; seconds = seconds)
@@ -102,10 +102,10 @@ function main()
         )
             @printf("%-6s %-9s %-12s %-12s %-10d %-10s\n",
                 string(r.name), stage,
-                simple_fmt_time(br.t_min),
-                simple_fmt_time(br.t_median),
+                fmt_time(br.t_min),
+                fmt_time(br.t_median),
                 br.allocs,
-                simple_fmt_bytes(br.memory),
+                fmt_bytes(br.memory),
             )
         end
     end

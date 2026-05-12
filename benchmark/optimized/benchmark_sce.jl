@@ -1,159 +1,125 @@
 #!/usr/bin/env julia
 #
+# Benchmark the optimized JPhi MC engine on a single fixture: load the
+# Hamiltonian, build the LocalEnergyCache, measure the reference vs
+# fast-path energy, and time a Metropolis sweep.
+#
+# CLI options:
+#   --xml=/path/to/jphi.xml    Input XML path (default: test/bcc_2x2x2/jphi.xml).
+#   --repeat=n1,n2,n3          Supercell repeat (default 1,1,1).
+#   --seed=42                  RNG seed for the spin configuration.
+#   --T=0.02585                MC temperature [eV] (this is JPhiSpinMC's API; the
+#                              optimized engine takes eV directly, unlike the
+#                              Kelvin convention used by the Simple submodule).
+#   --spin_theta_max=0.5       Geodesic proposal half-width [rad].
+#   --seconds=2.0              BenchmarkTools per-bench wall-clock budget.
+#                              BT collects samples until either this many seconds
+#                              elapse or 10 000 samples are taken, then reports
+#                              min/median over them.
+#
 # Usage:
-#   julia benchmark/optimized/benchmark_sce.jl
-#
-# Options (all optional; pass as --key=value):
-#   --xml=/path/to/jphi.xml   Input XML path (default: test/bcc_2x2x2/jphi.xml)
-#   --repeat=n1,n2,n3         Supercell repeat (default: 1,1,1)
-#   --evals=N                 Number of energy evaluations for averaging (default: 20)
-#   --sweeps=N                Number of MC sweeps for averaging (default: 50)
-#   --seed=S                  RNG seed for random spin initialization (default: 42)
-#   --T=VALUE                 MC temperature in same unit as JPhi energy (default: 0.02585)
-#   --spin_theta_max=VALUE    Geodesic proposal max angle [rad] (default: 0.5)
-#
-# Examples:
-#   julia benchmark/optimized/benchmark_sce.jl --evals=100
-#   julia benchmark/optimized/benchmark_sce.jl --repeat=2,2,2 --evals=50
-#   julia benchmark/optimized/benchmark_sce.jl --xml=/tmp/jphi.xml --repeat=1,1,1 --seed=1
+#   julia --project=benchmark benchmark/optimized/benchmark_sce.jl
+#   julia --project=benchmark benchmark/optimized/benchmark_sce.jl --repeat=2,2,2
 
 import Pkg
-Pkg.activate(joinpath(@__DIR__, "../.."))
+Pkg.activate(joinpath(@__DIR__, ".."))
 
-using Random
-using LinearAlgebra
+using Printf
+using Random: MersenneTwister
 using Carlo
 using SpinClusterMC
 using SpinClusterMC.JPhiMagestyCarlo
-
 const JMCC = JPhiMagestyCarlo
 
-function parse_repeat(s::AbstractString)::NTuple{3, Int}
-    parts = split(s, ",")
-    length(parts) == 3 || error("repeat must be n1,n2,n3 (e.g. 1,1,1), got: $s")
-    vals = parse.(Int, strip.(parts))
-    all(>(0), vals) || error("repeat must be positive integers, got: $s")
-    return (vals[1], vals[2], vals[3])
-end
-
-function parse_args(args)
-    opts = Dict{String, String}()
-    for a in args
-        startswith(a, "--") || error("unknown argument format: $a")
-        kv = split(a[3:end], "="; limit = 2)
-        length(kv) == 2 || error("argument must be --key=value, got: $a")
-        opts[kv[1]] = kv[2]
-    end
-    return opts
-end
-
-function rand_unit_spins(rng, n::Int)
-    spins = randn(rng, 3, n)
-    for i in 1:n
-        spins[:, i] ./= norm(spins[:, i])
-    end
-    return spins
-end
-
-function avg_eval_time_s(f::Function, n_eval::Int)
-    checksum = 0.0
-    t = @elapsed begin
-        for _ in 1:n_eval
-            checksum += f()
-        end
-    end
-    return t / n_eval, checksum
-end
-
-function avg_sweep_time_s(mc, ctx, n_sweeps::Int)
-    t = @elapsed begin
-        for _ in 1:n_sweeps
-            Carlo.sweep!(mc, ctx)
-        end
-    end
-    return t / n_sweeps
-end
+include(joinpath(@__DIR__, "..", "bench_helpers.jl"))
 
 function main()
     defaults = Dict(
-        "xml" => joinpath(@__DIR__, "../../test/bcc_2x2x2/jphi.xml"),
-        "repeat" => "1,1,1",
-        "evals" => "20",
-        "sweeps" => "50",
-        "seed" => "42",
-        "T" => "0.02585",
+        "xml"            => FIXTURES.bcc,
+        "repeat"         => "1,1,1",
+        "seed"           => "42",
+        "T"              => "0.02585",
         "spin_theta_max" => "0.5",
+        "seconds"        => "2.0",
     )
-    opts = merge(defaults, parse_args(ARGS))
+    opts = merge(defaults, parse_kv_args(ARGS))
 
-    xml_path = abspath(opts["xml"])
-    repeat = parse_repeat(opts["repeat"])
-    n_eval = parse(Int, opts["evals"])
-    n_sweeps = parse(Int, opts["sweeps"])
-    seed = parse(Int, opts["seed"])
-    T = parse(Float64, opts["T"])
+    xml            = abspath(opts["xml"])
+    repeat         = parse_repeat_csv(opts["repeat"])
+    seed           = parse(Int, opts["seed"])
+    T              = parse(Float64, opts["T"])
     spin_theta_max = parse(Float64, opts["spin_theta_max"])
+    seconds        = parse(Float64, opts["seconds"])
 
-    isfile(xml_path) || error("xml file not found: $xml_path")
-    n_eval > 0 || error("evals must be > 0, got: $n_eval")
-    n_sweeps > 0 || error("sweeps must be > 0, got: $n_sweeps")
-    T > 0 || error("T must be > 0, got: $T")
+    isfile(xml)       || error("xml file not found: $xml")
+    T > 0             || error("T must be > 0, got: $T")
     spin_theta_max > 0 || error("spin_theta_max must be > 0, got: $spin_theta_max")
+    seconds > 0       || error("seconds must be > 0, got: $seconds")
 
-    println("=== benchmark_sce ===")
-    println("xml    = ", xml_path)
-    println("repeat = ", repeat)
-    println("evals  = ", n_eval)
-    println("sweeps = ", n_sweeps)
-    println("seed   = ", seed)
-    println("T      = ", T)
-    println("spin_theta_max = ", spin_theta_max)
+    println("=== benchmark_sce (Optimized) ===")
+    println("xml            = ", xml)
+    println("repeat         = ", repeat)
+    println("seed           = ", seed)
+    println("T              = ", T, " eV")
+    println("spin_theta_max = ", spin_theta_max, " rad")
+    println("budget         = ", seconds, " s/bench (BenchmarkTools wall-clock cap)")
     println()
 
-    t_load = @elapsed h = load_sce_hamiltonian(xml_path; repeat = repeat)
-    t_cache = @elapsed cache = JMCC.build_local_energy_cache(h)
-    println("load_sce_hamiltonian : ", round(1e3 * t_load; digits = 2), " ms")
-    println("build_local_energy_cache : ", round(1e3 * t_cache; digits = 2), " ms")
+    # ----- construction -----
+    r_load = run_bench(() -> load_sce_hamiltonian(xml; repeat = repeat); seconds = seconds)
+    h = load_sce_hamiltonian(xml; repeat = repeat)
+    r_cache = run_bench(() -> JMCC.build_local_energy_cache(h); seconds = seconds)
+    cache = JMCC.build_local_energy_cache(h)
 
+    # ----- energy: reference vs uncached fast path -----
     rng = MersenneTwister(seed)
-    spins = rand_unit_spins(rng, h.n_atoms)
-
-    # Warm-up to reduce first-call compilation effects in timing.
-    _ = sce_energy(h, spins)
-    _ = JMCC._energy_from_instances(cache.instances, spins)
-
-    t_ref, sum_ref = avg_eval_time_s(() -> sce_energy(h, spins), n_eval)
-    t_fast, sum_fast = avg_eval_time_s(() -> JMCC._energy_from_instances(cache.instances, spins), n_eval)
-
-    e_ref = sce_energy(h, spins)
+    spins = random_unit_spins(rng, h.n_atoms)
+    e_ref  = sce_energy(h, spins)
     e_fast = JMCC._energy_from_instances(cache.instances, spins)
     diff = abs(e_ref - e_fast)
 
-    println()
-    println("n_atoms = ", h.n_atoms)
-    println("instances = ", length(cache.instances))
-    println()
-    println("sce_energy (reference) avg : ", round(1e3 * t_ref; digits = 3), " ms/eval")
-    println("from_instances (fast) avg  : ", round(1e3 * t_fast; digits = 3), " ms/eval")
-    println("speedup (reference/fast)   : ", round(t_ref / t_fast; digits = 3), "x")
-    println("abs(E_ref - E_fast)        : ", diff)
-    println("checksum ref/fast          : ", sum_ref, " / ", sum_fast)
+    r_ref  = run_bench(() -> sce_energy(h, spins);                          seconds = seconds)
+    r_fast = run_bench(() -> JMCC._energy_from_instances(cache.instances, spins); seconds = seconds)
 
+    # ----- MC sweep -----
     params = Dict{Symbol, Any}(
-        :xml_path => xml_path,
-        :repeat => repeat,
-        :T => T,
+        :xml_path       => xml,
+        :repeat         => repeat,
+        :T              => T,
         :spin_theta_max => spin_theta_max,
     )
     mc = JPhiSpinMC(params)
-    ctx = Carlo.MCContext(n_sweeps, 0, MersenneTwister(seed), nothing)
-
+    ctx = Carlo.MCContext(1, 0, MersenneTwister(seed), nothing)
     Carlo.init!(mc, ctx, params)
-    Carlo.sweep!(mc, ctx) # warm-up
-    t_sweep = avg_sweep_time_s(mc, ctx, n_sweeps)
+    r_sweep = run_bench(() -> Carlo.sweep!(mc, ctx); seconds = seconds)
+
+    # ----- summary -----
+    println("n_atoms                = ", h.n_atoms)
+    println("instances              = ", length(cache.instances))
+    println()
+
+    @printf("%-32s %-12s %-12s %-10s %-10s\n",
+        "stage", "t_min", "t_median", "allocs", "memory")
+    println("-"^80)
+    for (label, r) in (
+        ("load_sce_hamiltonian",            r_load),
+        ("build_local_energy_cache",        r_cache),
+        ("sce_energy (reference)",          r_ref),
+        ("_energy_from_instances (fast)",   r_fast),
+        ("MC sweep (Carlo.sweep!)",         r_sweep),
+    )
+        @printf("%-32s %-12s %-12s %-10d %-10s\n",
+            label,
+            fmt_time(r.t_min),
+            fmt_time(r.t_median),
+            r.allocs,
+            fmt_bytes(r.memory),
+        )
+    end
 
     println()
-    println("MC sweep avg               : ", round(1e3 * t_sweep; digits = 3), " ms/sweep")
+    println("speedup (reference / fast) : ", round(r_ref.t_min / r_fast.t_min; digits = 2), "x")
+    println("abs(E_ref - E_fast)        : ", diff)
     println("MC final energy            : ", mc.energy)
 end
 

@@ -5,9 +5,9 @@ Simple is the basis for ongoing performance work, the scripts here use
 **`BenchmarkTools`** (per-call min/median + allocation count + bytes) so
 the bottleneck is visible at a glance, not just total wall time.
 
-These benchmarks live in their own Pkg environment
-([`../Project.toml`](../Project.toml)) so `BenchmarkTools` does not
-leak into the main package's dependency graph. Run every script as:
+These benchmarks share the [`../Project.toml`](../Project.toml) Pkg env
+and the [`../bench_helpers.jl`](../bench_helpers.jl) helpers with
+[`../optimized/`](../optimized/). Run any single script as:
 
 ```bash
 julia --project=benchmark benchmark/simple/<script>.jl
@@ -48,7 +48,7 @@ The first invocation will resolve the environment and pull
 
 ## Reading the output
 
-`simple_bench` returns a `BenchResult` with four numbers:
+`run_bench` returns a `BenchResult` with four numbers:
 
 | Field | Meaning |
 |---|---|
@@ -74,6 +74,4 @@ call, which scales as `n_atoms × (max_l+1)²` allocations per evaluation.
 
 ## Relation to the optimized benchmarks
 
-See [`../README.md`](../README.md) for the bigger picture (when to run
-which tree). The optimized tree still uses plain `@elapsed` and the root
-Pkg env; we may unify the two later but for now they live separately.
+See [`../README.md`](../README.md) for the bigger picture.

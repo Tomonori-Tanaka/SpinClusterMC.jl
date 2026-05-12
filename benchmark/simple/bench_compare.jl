@@ -39,7 +39,7 @@ using SpinClusterMC.Simple
 using SpinClusterMC.JPhiMagestyCarlo
 const JMCC = JPhiMagestyCarlo
 
-include(joinpath(@__DIR__, "fixtures.jl"))
+include(joinpath(@__DIR__, "..", "bench_helpers.jl"))
 
 function bench_fixture(
         xml::AbstractString, repeat::NTuple{3, Int}, seed::Int; seconds::Real,
@@ -54,7 +54,7 @@ function bench_fixture(
     max_l = derived.max_l
 
     rng = MersenneTwister(seed)
-    spins = simple_random_spins(rng, h_simple.n_atoms)
+    spins = random_unit_spins(rng, h_simple.n_atoms)
 
     # Each cached call rebuilds the zlm cache for the current spins (same
     # cost as inside Carlo.init! on a fresh config).
@@ -69,9 +69,9 @@ function bench_fixture(
     rel_err_ref  = abs(e_s - e_r) / (abs(e_r) + 1e-300)
     rel_err_fast = abs(e_s - e_f) / (abs(e_f) + 1e-300)
 
-    r_simple = simple_bench(() -> total_energy(h_simple, spins); seconds = seconds)
-    r_ref    = simple_bench(() -> sce_energy(h_opt, spins);      seconds = seconds)
-    r_fast   = simple_bench(fast_call;                            seconds = seconds)
+    r_simple = run_bench(() -> total_energy(h_simple, spins); seconds = seconds)
+    r_ref    = run_bench(() -> sce_energy(h_opt, spins);      seconds = seconds)
+    r_fast   = run_bench(fast_call;                            seconds = seconds)
 
     return (;
         xml,
@@ -101,10 +101,10 @@ function main()
         "seconds"  => "2.0",
         "seed"     => "42",
     )
-    opts = merge(defaults, simple_parse_args(ARGS))
+    opts = merge(defaults, parse_kv_args(ARGS))
 
     names   = [Symbol(strip(s)) for s in split(opts["fixtures"], ",")]
-    repeat  = simple_parse_repeat(opts["repeat"])
+    repeat  = parse_repeat_csv(opts["repeat"])
     seconds = parse(Float64, opts["seconds"])
     seed    = parse(Int, opts["seed"])
     seconds > 0 || error("seconds must be > 0, got: $seconds")
@@ -118,9 +118,9 @@ function main()
 
     results = []
     for name in names
-        haskey(SIMPLE_FIXTURES, name) ||
-            error("unknown fixture $(name); choose from $(keys(SIMPLE_FIXTURES))")
-        xml = getproperty(SIMPLE_FIXTURES, name)
+        haskey(FIXTURES, name) ||
+            error("unknown fixture $(name); choose from $(keys(FIXTURES))")
+        xml = getproperty(FIXTURES, name)
         print("$(rpad(string(name), 5)) ... ")
         flush(stdout)
         r = bench_fixture(xml, repeat, seed; seconds = seconds)
@@ -137,9 +137,9 @@ function main()
     for r in results
         @printf("%-6s %-12s %-12s %-12s %-10s %-10s\n",
             string(r.name),
-            simple_fmt_time(r.r_simple.t_min),
-            simple_fmt_time(r.r_ref.t_min),
-            simple_fmt_time(r.r_fast.t_min),
+            fmt_time(r.r_simple.t_min),
+            fmt_time(r.r_ref.t_min),
+            fmt_time(r.r_fast.t_min),
             fmt_ratio(ratio(r.r_simple.t_min, r.r_ref.t_min)),
             fmt_ratio(ratio(r.r_simple.t_min, r.r_fast.t_min)),
         )
@@ -152,9 +152,9 @@ function main()
         "x vs ref", "x vs fast")
     println("-"^94)
     for r in results
-        s_s = @sprintf("%d / %s", r.r_simple.allocs, simple_fmt_bytes(r.r_simple.memory))
-        s_r = @sprintf("%d / %s", r.r_ref.allocs,    simple_fmt_bytes(r.r_ref.memory))
-        s_f = @sprintf("%d / %s", r.r_fast.allocs,   simple_fmt_bytes(r.r_fast.memory))
+        s_s = @sprintf("%d / %s", r.r_simple.allocs, fmt_bytes(r.r_simple.memory))
+        s_r = @sprintf("%d / %s", r.r_ref.allocs,    fmt_bytes(r.r_ref.memory))
+        s_f = @sprintf("%d / %s", r.r_fast.allocs,   fmt_bytes(r.r_fast.memory))
         @printf("%-6s %-18s %-18s %-18s %-10s %-10s\n",
             string(r.name), s_s, s_r, s_f,
             fmt_ratio(ratio(r.r_simple.allocs, r.r_ref.allocs)),

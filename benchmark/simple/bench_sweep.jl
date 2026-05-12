@@ -29,7 +29,7 @@ using Carlo
 using SpinClusterMC
 using SpinClusterMC.Simple
 
-include(joinpath(@__DIR__, "fixtures.jl"))
+include(joinpath(@__DIR__, "..", "bench_helpers.jl"))
 
 function bench_fixture(
         xml::AbstractString, repeat::NTuple{3, Int}, seed::Int; seconds::Real,
@@ -52,7 +52,7 @@ function bench_fixture(
     ctx = Carlo.MCContext{MersenneTwister}(params)
     Carlo.init!(mc, ctx, params)
 
-    r_sweep = simple_bench(() -> Carlo.sweep!(mc, ctx); seconds = seconds)
+    r_sweep = run_bench(() -> Carlo.sweep!(mc, ctx); seconds = seconds)
 
     return (;
         xml,
@@ -70,10 +70,10 @@ function main()
         "seconds"  => "2.0",
         "seed"     => "42",
     )
-    opts = merge(defaults, simple_parse_args(ARGS))
+    opts = merge(defaults, parse_kv_args(ARGS))
 
     names   = [Symbol(strip(s)) for s in split(opts["fixtures"], ",")]
-    repeat  = simple_parse_repeat(opts["repeat"])
+    repeat  = parse_repeat_csv(opts["repeat"])
     seconds = parse(Float64, opts["seconds"])
     seed    = parse(Int, opts["seed"])
     seconds > 0 || error("seconds must be > 0, got: $seconds")
@@ -87,9 +87,9 @@ function main()
 
     results = []
     for name in names
-        haskey(SIMPLE_FIXTURES, name) ||
-            error("unknown fixture $(name); choose from $(keys(SIMPLE_FIXTURES))")
-        xml = getproperty(SIMPLE_FIXTURES, name)
+        haskey(FIXTURES, name) ||
+            error("unknown fixture $(name); choose from $(keys(FIXTURES))")
+        xml = getproperty(FIXTURES, name)
         print("$(rpad(string(name), 5)) ... ")
         flush(stdout)
         r = bench_fixture(xml, repeat, seed; seconds = seconds)
@@ -105,10 +105,10 @@ function main()
     for r in results
         @printf("%-6s %-7d %-12d %-12s %-12s %-10d %-10s\n",
             string(r.name), r.n_atoms, r.n_instances,
-            simple_fmt_time(r.r_sweep.t_min),
-            simple_fmt_time(r.r_sweep.t_median),
+            fmt_time(r.r_sweep.t_min),
+            fmt_time(r.r_sweep.t_median),
             r.r_sweep.allocs,
-            simple_fmt_bytes(r.r_sweep.memory),
+            fmt_bytes(r.r_sweep.memory),
         )
     end
     println()
@@ -119,7 +119,7 @@ function main()
         n = r.n_atoms
         @printf("%-6s %-12s %-12.1f\n",
             string(r.name),
-            simple_fmt_time(r.r_sweep.t_min / n),
+            fmt_time(r.r_sweep.t_min / n),
             r.r_sweep.allocs / n,
         )
     end
