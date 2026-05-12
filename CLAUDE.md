@@ -36,8 +36,38 @@
 
 ## 設計メモ
 
-保留中の設計判断・将来の実装方針は [`docs/design_notes.md`](docs/design_notes.md) に記録している。
-格子・セル・クラスターの用語定義は [`docs/terminology.md`](docs/terminology.md) を参照。
+- 進行中の開発単位は [`docs/specs/[YYMMDD]-[slug]/`](docs/specs/) に置く
+  (requirements.md / design.md / tasklist.md の 3 ファイル構成)。
+- 横断的なメモ・保留中のアイデア・optimized版の future-work は
+  [`docs/design_notes.md`](docs/design_notes.md)。
+- 格子・セル・クラスターの用語定義は [`docs/terminology.md`](docs/terminology.md)。
+
+### spec フォルダの運用ルール
+
+**中規模以上の開発を始める前に、必ず先に spec フォルダを作って合意を取る。**
+
+判定基準 (どれかに当てはまったら spec を作る):
+- 数日以上かかる
+- 設計判断が複数ある
+- 後から「なぜこう作った?」と訊かれそう
+- 既存の挙動が変わる中規模以上の変更 (新機能追加 / 中規模リファクタリング)
+
+spec を作らなくてよいもの:
+- バグ修正 (テスト追加で完結)
+- ドキュメント・コメント修正
+- 1 ファイル内の小規模 refactor
+- 既存テストで担保される動作の小修正
+
+手順 (Claude 側で実施):
+1. `docs/specs/[YYMMDD]-[slug]/` を作る (`YYMMDD` = `date +%y%m%d`、`slug` は英語の kebab-case)。
+2. 同フォルダに以下 3 ファイルを置き、user と相談しながら埋める:
+   - `requirements.md` — 目的・不変条件・スコープ・完了基準
+   - `design.md` — モジュール構成・API・型・規約
+   - `tasklist.md` — マイルストーン (粗い粒度。日々の細かい作業は TaskCreate)
+3. spec の合意ができてから実装に着手。
+4. 完了後もフォルダは残す (削除しない、履歴として参照)。
+
+参考例: [`docs/specs/260512-simple-impl/`](docs/specs/260512-simple-impl/)。
 
 ## 設計判断
 
