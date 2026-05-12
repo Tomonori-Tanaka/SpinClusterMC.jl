@@ -32,8 +32,6 @@ export SCEHamiltonian,
     sce_energy,
     coupled_cluster_energy,
     supercell_atom_index,
-    interaction_partners,
-    interaction_partners_by_body,
     JPhiSpinMC
 
 include("xml_io.jl")
@@ -559,20 +557,6 @@ function build_local_energy_cache(h::SCEHamiltonian)::LocalEnergyCache
     )
 end
 
-@inline interaction_partners(cache::LocalEnergyCache, atom::Int)::Vector{Int} =
-    cache.partners_by_atom[atom]
-
-function interaction_partners_by_body(
-    cache::LocalEnergyCache,
-    atom::Int,
-)::Dict{Int, Vector{Int}}
-    out = Dict{Int, Vector{Int}}()
-    for (bidx, body) in enumerate(cache.body_list)
-        out[body] = cache.partners_by_atom_by_body[bidx][atom]
-    end
-    return out
-end
-
 """
 Accumulate total interaction energy from prebuilt cluster instances.
 """
@@ -785,12 +769,6 @@ mutable struct JPhiSpinMC{S<:SphericalHarmonics} <: AbstractMC
     local_template::Union{Nothing,LocalEnergyTemplate}
     atoms_buf::Vector{Int}  # reused buffer in sweep! to avoid per-instance allocation
 end
-
-@inline interaction_partners(mc::JPhiSpinMC, atom::Int)::Vector{Int} =
-    interaction_partners(mc.local_cache, atom)
-
-@inline interaction_partners_by_body(mc::JPhiSpinMC, atom::Int)::Dict{Int, Vector{Int}} =
-    interaction_partners_by_body(mc.local_cache, atom)
 
 # Compute max_l, max_sites, and body_list directly from the SALC list, without
 # enumerating all translated instances.  Used by :tensor_template to avoid the

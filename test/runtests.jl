@@ -6,7 +6,7 @@ using Random
 using LinearAlgebra
 
 const JMCC = SpinClusterMC.JPhiMagestyCarlo
-const XML = joinpath(@__DIR__, "..", "examples", "bccFe", "metropolis", "jphi.xml")
+const XML = joinpath(@__DIR__, "bcc_2x2x2", "jphi.xml")
 
 # ---------------------------------------------------------------------------
 # Helper: random unit spin matrix
@@ -492,6 +492,21 @@ end
         end
     else
         @info "Skipping slow ferh_4x4x4 tests (pass 'slow' to enable: Pkg.test(test_args=[\"slow\"]))"
+    end
+
+    # JET static analysis. Scoped to our own modules so issues in upstream
+    # packages (Magesty, Carlo, SpheriCart, EzXML, ...) are not reported here.
+    @testset "JET static analysis" begin
+        import JET
+        result = JET.report_package(
+            SpinClusterMC;
+            target_modules = (SpinClusterMC, SpinClusterMC.JPhiMagestyCarlo),
+        )
+        reports = JET.get_reports(result)
+        for r in reports
+            @info "JET report" report = sprint(show, r)
+        end
+        @test isempty(reports)
     end
 
 end

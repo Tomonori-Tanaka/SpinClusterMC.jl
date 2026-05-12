@@ -4,9 +4,9 @@
 # _energy_from_instances_cached (zlm-cache path) for ferh_4x4x4.
 #
 # Usage:
-#   julia scripts/dev/benchmark_sce_reference.jl
-#   julia scripts/dev/benchmark_sce_reference.jl --xml=test/ferh_4x4x4/jphi.xml --evals=10
-#   julia scripts/dev/benchmark_sce_reference.jl --evals=5 --repeats=1x1x1,2x2x2
+#   julia benchmark/optimized/benchmark_sce_reference.jl
+#   julia benchmark/optimized/benchmark_sce_reference.jl --xml=test/ferh_4x4x4/jphi.xml --evals=10
+#   julia benchmark/optimized/benchmark_sce_reference.jl --evals=5 --repeats=1x1x1,2x2x2
 
 import Pkg
 Pkg.activate(joinpath(@__DIR__, "../.."))

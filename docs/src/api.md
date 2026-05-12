@@ -40,13 +40,6 @@ coupled_cluster_energy
 supercell_atom_index
 ```
 
-## Interaction Queries
-
-```@docs
-interaction_partners
-interaction_partners_by_body
-```
-
 ## Internal Types
 
 ### ClusterInstance

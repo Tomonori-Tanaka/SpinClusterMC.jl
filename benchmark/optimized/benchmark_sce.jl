@@ -1,10 +1,10 @@
 #!/usr/bin/env julia
 #
 # Usage:
-#   julia scripts/dev/benchmark_sce.jl
+#   julia benchmark/optimized/benchmark_sce.jl
 #
 # Options (all optional; pass as --key=value):
-#   --xml=/path/to/jphi.xml   Input XML path (default: examples/bccFe/metropolis/jphi.xml)
+#   --xml=/path/to/jphi.xml   Input XML path (default: test/bcc_2x2x2/jphi.xml)
 #   --repeat=n1,n2,n3         Supercell repeat (default: 1,1,1)
 #   --evals=N                 Number of energy evaluations for averaging (default: 20)
 #   --sweeps=N                Number of MC sweeps for averaging (default: 50)
@@ -13,9 +13,9 @@
 #   --spin_theta_max=VALUE    Geodesic proposal max angle [rad] (default: 0.5)
 #
 # Examples:
-#   julia scripts/dev/benchmark_sce.jl --evals=100
-#   julia scripts/dev/benchmark_sce.jl --repeat=2,2,2 --evals=50
-#   julia scripts/dev/benchmark_sce.jl --xml=/tmp/jphi.xml --repeat=1,1,1 --seed=1
+#   julia benchmark/optimized/benchmark_sce.jl --evals=100
+#   julia benchmark/optimized/benchmark_sce.jl --repeat=2,2,2 --evals=50
+#   julia benchmark/optimized/benchmark_sce.jl --xml=/tmp/jphi.xml --repeat=1,1,1 --seed=1
 
 import Pkg
 Pkg.activate(joinpath(@__DIR__, "../.."))
@@ -76,7 +76,7 @@ end
 
 function main()
     defaults = Dict(
-        "xml" => joinpath(@__DIR__, "../../examples/bccFe/metropolis/jphi.xml"),
+        "xml" => joinpath(@__DIR__, "../../test/bcc_2x2x2/jphi.xml"),
         "repeat" => "1,1,1",
         "evals" => "20",
         "sweeps" => "50",

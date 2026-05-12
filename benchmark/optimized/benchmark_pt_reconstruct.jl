@@ -15,9 +15,9 @@
 #   serialize/deserialize   – per-checkpoint cost on the coordinator rank
 #
 # Usage:
-#   julia scripts/dev/benchmark_pt_reconstruct.jl
-#   julia scripts/dev/benchmark_pt_reconstruct.jl --xml=test/ferh_4x4x4/jphi.xml
-#   julia scripts/dev/benchmark_pt_reconstruct.jl --xml=test/ferh_4x4x4/jphi.xml --reps=20
+#   julia benchmark/optimized/benchmark_pt_reconstruct.jl
+#   julia benchmark/optimized/benchmark_pt_reconstruct.jl --xml=test/ferh_4x4x4/jphi.xml
+#   julia benchmark/optimized/benchmark_pt_reconstruct.jl --xml=test/ferh_4x4x4/jphi.xml --reps=20
 
 import Pkg
 Pkg.activate(joinpath(@__DIR__, "../.."))

@@ -1,16 +1,8 @@
 # SpinClusterMC — Examples
 
-Each subdirectory is an independent example job.
-See the README in each directory for system-specific instructions.
-
-## Available examples
-
-### bcc Fe
-
-| Directory | Method | Description |
-|-----------|--------|-------------|
-| [bccFe/metropolis](bccFe/metropolis/) | Metropolis | Independent simulations at 8 temperatures |
-| [bccFe/parallel_tempering](bccFe/parallel_tempering/) | Parallel Tempering | Replica-exchange MC over 8 temperatures |
+Ready-to-run example scripts. Numbered flat files (`01_*.jl`, `02_*.jl`, ...)
+will land alongside the `src/simple/` reference implementation — see
+`docs/design_notes.md` for the planned set.
 
 ---
 
