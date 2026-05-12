@@ -78,22 +78,31 @@ Claude Code 内蔵の TaskCreate で管理し、ここには反映しない。�
 - [x] テスト: `test/simple/test_simple_spin_proposal.jl` (各モード × normalize 確認 +
       geodesic stays-on-sphere + θmax 上限尊重 + validation)
 
-### M7. MC 型 + Carlo glue
-- [ ] `src/simple/mc.jl`:
-  - [ ] `mutable struct SCEMC <: Carlo.AbstractMC`
-  - [ ] `Carlo.init!`, `Carlo.measure!`, `Carlo.register_evaluables`
-        (Magnetization 4 観測量 + Energy/Energy2 + 派生は requirements.md 参照)
-  - [ ] `extra_measure` / `extra_evaluables` callback
-  - [ ] PT 後付け可能な field 配置 (T mutable, energy field, xml_path, repeat 保持)
-- [ ] `src/simple/updates/metropolis.jl` (`metropolis_sweep!`)
-- [ ] `Carlo.sweep!` から `params[:update_scheme]` で dispatch
-- [ ] 周期的 renormalization (`renorm_every`, default 1000)
-- [ ] **G4 判断**: `enabled_bodies` field を入れるかを user に確認。
-  - 入れる場合: 既存 JPhiSpinMC と同じ `params[:enabled_bodies]` 規約。
-  - 入れない場合: 初版非サポートと design.md / requirements.md に明記、parity テストは
-    `params[:enabled_bodies] => nothing` でのみ実施。
-- [ ] テスト: `test/simple/test_simple_mc.jl` (init + 1 sweep が走る)
-- [ ] テスト: `test/parity/test_parity_fege.jl` (異方性込み、`rtol = 1e-8`)
+### M7. MC 型 + Carlo glue (完了: 2026-05-12)
+- [x] `src/simple/mc.jl`:
+  - [x] `mutable struct SCEMC <: Carlo.AbstractMC`
+  - [x] `Carlo.init!`, `Carlo.measure!`, `Carlo.register_evaluables`
+        (Magnetization 4 観測量 + Energy/Energy2 + `:SpecificHeat` / `:BinderRatio` /
+        `:Susceptibility`)
+  - [x] `extra_measure` / `extra_evaluables` callback
+  - [x] PT 後付け可能な field 配置 (T mutable, energy field, xml_path, repeat 保持)
+- [x] `src/simple/updates/metropolis.jl` (`metropolis_sweep!`)
+- [x] `Carlo.sweep!` 内の dispatch (v1 は `:metropolis` のみ; constructor で
+      validate して unsupported scheme は ArgumentError)
+- [x] 周期的 renormalization (`renorm_every`, default 1000) + energy drift check
+      (rtol=1e-10 + atol=1e-12; assert で error)
+- [x] **G4 判断**: `enabled_bodies` は v1 不採用 (Simple は教材性優先、optimize 側機能を
+      全部再現しない)。requirements.md / design.md に明記。
+- [x] テスト: `test/simple/test_simple_mc.jl` (default + user-supplied params、init、sweep、
+      drift、measure、Zeeman 統合、validation)
+- [x] テスト: `test/parity/test_parity_fege.jl` (Lf=0..4 異方性含む、`rtol = 1e-8` for
+      total、`1e-7` for delta、`sum_local / 2 = total` identity)
+
+設計判断:
+- 温度は Kelvin 入力 (constructor で eV 変換) — Simple API のみ。optimize 側は
+  eV 入力のまま (CLAUDE.md「物理規約」明記)。
+- ExternalTerm は `external::Union{Nothing, ExternalTerm}`、`_external_*` dispatch
+  helper で `Nothing` 経路を type-stable に no-op 化 (JET union split 対応)。
 
 ### M8. Examples
 - [ ] `examples/01_quickstart.jl` (bcc_2x2x2)

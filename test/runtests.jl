@@ -484,7 +484,9 @@ end
     include("simple/test_simple_energy.jl")
     include("simple/test_simple_external.jl")
     include("simple/test_simple_spin_proposal.jl")
+    include("simple/test_simple_mc.jl")
     include("parity/test_parity_bcc.jl")
+    include("parity/test_parity_fege.jl")
 
     if isfile(joinpath(@__DIR__, "fege_2x2x2", "jphi.xml"))
         include("fege_2x2x2/test_fege_2x2x2.jl")

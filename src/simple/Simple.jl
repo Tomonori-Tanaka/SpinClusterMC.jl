@@ -15,5 +15,7 @@ include("cg.jl")
 include("energy.jl")
 include("external.jl")
 include("spin_proposal.jl")
+include("mc.jl")
+include("updates/metropolis.jl")
 
 end
