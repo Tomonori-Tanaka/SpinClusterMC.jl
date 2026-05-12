@@ -55,10 +55,18 @@ Claude Code 内蔵の TaskCreate で管理し、ここには反映しない。�
       gradient の数値微分一致)
 - [x] テスト: `test/parity/test_parity_bcc.jl` (`rtol = 1e-8` for total, `1e-7` for delta)
 
-### M5. 外場
-- [ ] `src/simple/external.jl` (`ExternalTerm` 抽象 + `Zeeman` 実装)
-- [ ] `ExternalTerm` も `local_energy / delta_local_energy / gradient` を実装
-- [ ] テスト: `test/simple/test_simple_external.jl` (Zeeman の `gradient = -B` 等)
+### M5. 外場 (完了: 2026-05-12)
+- [x] `src/simple/external.jl` (`ExternalTerm` 抽象 + `Zeeman` 実装)
+- [x] `ExternalTerm` も `local_energy / delta_local_energy / gradient` を実装
+- [x] テスト: `test/simple/test_simple_external.jl` (Zeeman の `gradient = -m_i·B` 等)
+
+設計判断:
+- 磁気モーメントの大きさ `m_i` は `MomentModel` 抽象で表現
+  (`UniformMoment` / `PerSiteMoment` で副格子依存に対応、将来
+  `ClusterExpansionMoment` で局所環境依存に拡張可能 — `moment_at(model, i, spins)`
+  query API が `spins` を受けるため signature を変えずに拡張できる)
+- Zeeman: `E = -Σ_i m_i (B · S_i)`
+- 単位は積 `m_i · B` が eV になるよう呼び出し側で揃える
 
 ### M6. Spin proposal + initial spins
 - [ ] `src/simple/spin_proposal.jl`:

@@ -13,5 +13,6 @@ include("xml_io.jl")
 include("types.jl")
 include("cg.jl")
 include("energy.jl")
+include("external.jl")
 
 end
