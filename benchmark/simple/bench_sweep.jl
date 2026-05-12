@@ -3,18 +3,25 @@
 # Benchmark `Carlo.sweep!` on an `SCEMC` Monte Carlo instance.
 #
 # A "sweep" tries `n_atoms` single-site Metropolis updates. We report
-# both ms/sweep and ms/flip so the per-fixture cost is comparable across
-# different supercell sizes. The temperature is fixed at 100 K (deep in
-# the ordered phase for the bundled fixtures), and the geodesic
-# proposal half-width is fixed at 0.3 rad to get a moderate accept rate.
+# per-sweep min/median time, allocations, and bytes — and the per-flip
+# derived figures (t / n_atoms, allocs / n_atoms). T = 100 K and
+# spin_theta_max = 0.3 rad fix the move statistics so per-fixture
+# comparisons are meaningful.
+#
+# CLI options:
+#   --fixtures=bcc,fege,ferh   Comma-separated subset (ferh excluded by default).
+#   --repeat=n1,n2,n3          Supercell repeat (default 1,1,1).
+#   --seconds=2.0              BenchmarkTools per-bench wall-clock budget.
+#                              Sweeps are slow so we default higher than
+#                              the energy benches; bump further on big fixtures.
+#   --seed=42                  RNG seed.
 #
 # Usage:
-#   julia benchmark/simple/bench_sweep.jl
-#   julia benchmark/simple/bench_sweep.jl --fixtures=bcc,fege --sweeps=30
-#   julia benchmark/simple/bench_sweep.jl --fixtures=ferh --sweeps=2
+#   julia --project=benchmark benchmark/simple/bench_sweep.jl
+#   julia --project=benchmark benchmark/simple/bench_sweep.jl --fixtures=bcc,fege
 
 import Pkg
-Pkg.activate(joinpath(@__DIR__, "..", ".."))
+Pkg.activate(joinpath(@__DIR__, ".."))
 
 using Printf
 using Random: MersenneTwister
@@ -24,7 +31,9 @@ using SpinClusterMC.Simple
 
 include(joinpath(@__DIR__, "fixtures.jl"))
 
-function bench_fixture(xml::AbstractString, repeat::NTuple{3, Int}, n_sweeps::Int, seed::Int)
+function bench_fixture(
+        xml::AbstractString, repeat::NTuple{3, Int}, seed::Int; seconds::Real,
+    )
     params = Dict{Symbol, Any}(
         :T              => 100.0,            # K
         :xml_path       => xml,
@@ -43,22 +52,13 @@ function bench_fixture(xml::AbstractString, repeat::NTuple{3, Int}, n_sweeps::In
     ctx = Carlo.MCContext{MersenneTwister}(params)
     Carlo.init!(mc, ctx, params)
 
-    # Warm-up: one sweep absorbs first-call compilation.
-    Carlo.sweep!(mc, ctx)
-
-    t = @elapsed for _ in 1:n_sweeps
-        Carlo.sweep!(mc, ctx)
-    end
-    t_per_sweep = t / n_sweeps
-    t_per_flip  = t_per_sweep / mc.h.n_atoms
+    r_sweep = simple_bench(() -> Carlo.sweep!(mc, ctx); seconds = seconds)
 
     return (;
         xml,
         n_atoms     = mc.h.n_atoms,
         n_instances = length(mc.h.instances),
-        n_sweeps,
-        t_per_sweep,
-        t_per_flip,
+        r_sweep,
         final_energy_per_atom = mc.energy / mc.h.n_atoms,
     )
 end
@@ -67,21 +67,21 @@ function main()
     defaults = Dict(
         "fixtures" => "bcc,fege",
         "repeat"   => "1,1,1",
-        "sweeps"   => "20",
+        "seconds"  => "2.0",
         "seed"     => "42",
     )
     opts = merge(defaults, simple_parse_args(ARGS))
 
-    names    = [Symbol(strip(s)) for s in split(opts["fixtures"], ",")]
-    repeat   = simple_parse_repeat(opts["repeat"])
-    n_sweeps = parse(Int, opts["sweeps"])
-    seed     = parse(Int, opts["seed"])
-    n_sweeps > 0 || error("sweeps must be > 0, got: $n_sweeps")
+    names   = [Symbol(strip(s)) for s in split(opts["fixtures"], ",")]
+    repeat  = simple_parse_repeat(opts["repeat"])
+    seconds = parse(Float64, opts["seconds"])
+    seed    = parse(Int, opts["seed"])
+    seconds > 0 || error("seconds must be > 0, got: $seconds")
 
     println("=== bench_sweep (Simple) ===")
     println("fixtures = ", names)
     println("repeat   = ", repeat)
-    println("sweeps   = ", n_sweeps, " (after 1 warm-up)")
+    println("budget   = ", seconds, " s/bench (BenchmarkTools wall-clock cap)")
     println("seed     = ", seed)
     println()
 
@@ -92,27 +92,42 @@ function main()
         xml = getproperty(SIMPLE_FIXTURES, name)
         print("$(rpad(string(name), 5)) ... ")
         flush(stdout)
-        r = bench_fixture(xml, repeat, n_sweeps, seed)
+        r = bench_fixture(xml, repeat, seed; seconds = seconds)
         push!(results, (; name, r...))
         println("done (E/atom = ", round(r.final_energy_per_atom; digits = 4), " eV)")
     end
 
     println()
-    @printf("%-6s %-8s %-12s %-9s %-14s %-14s\n",
-        "fixture", "n_atoms", "n_instances", "sweeps",
-        "per_sweep", "per_flip")
-    println("-"^74)
+    @printf("%-6s %-7s %-12s %-12s %-12s %-10s %-10s\n",
+        "fixture", "n_atoms", "n_instances",
+        "t_min/sweep", "t_med/sweep", "allocs", "memory")
+    println("-"^76)
     for r in results
-        @printf("%-6s %-8d %-12d %-9d %-14s %-14s\n",
-            string(r.name), r.n_atoms, r.n_instances, r.n_sweeps,
-            simple_fmt_time(r.t_per_sweep),
-            simple_fmt_time(r.t_per_flip),
+        @printf("%-6s %-7d %-12d %-12s %-12s %-10d %-10s\n",
+            string(r.name), r.n_atoms, r.n_instances,
+            simple_fmt_time(r.r_sweep.t_min),
+            simple_fmt_time(r.r_sweep.t_median),
+            r.r_sweep.allocs,
+            simple_fmt_bytes(r.r_sweep.memory),
+        )
+    end
+    println()
+
+    @printf("%-6s %-12s %-12s\n", "fixture", "t_min/flip", "allocs/flip")
+    println("-"^36)
+    for r in results
+        n = r.n_atoms
+        @printf("%-6s %-12s %-12.1f\n",
+            string(r.name),
+            simple_fmt_time(r.r_sweep.t_min / n),
+            r.r_sweep.allocs / n,
         )
     end
     println()
     println("Notes:")
-    println("  per_sweep = average over n_sweeps; per_flip = per_sweep / n_atoms.")
-    println("  ferh is excluded from the default fixture list; pass --fixtures=ferh --sweeps=2 to include it.")
+    println("  per-flip values = per-sweep / n_atoms. allocs/flip > 1000 indicates")
+    println("  the SH cache rebuild per delta_local_energy call dominates the sweep.")
+    println("  ferh is excluded from defaults; --fixtures=ferh --seconds=30 to include.")
 end
 
 main()

@@ -2,19 +2,27 @@
 #
 # Benchmark Hamiltonian construction for the Simple submodule.
 #
-# Measures the wall-clock cost of `SpinClusterHamiltonian(xml; repeat)`, which
-# internally does:
+# Measures the wall-clock cost of `SpinClusterHamiltonian(xml; repeat)`,
+# which internally does:
 #   1. parse_jphi_xml (XML -> SALCs, basis, JPhi map)
 #   2. _generate_instances (per-(SALC, translation, tile) ClusterInstance list)
 #   3. build_cg_table (tesseral CG via Magesty.AngularMomentumCoupling)
 #
+# CLI options:
+#   --fixtures=bcc,fege,ferh   Comma-separated subset.
+#   --repeat=n1,n2,n3          Supercell repeat (default 1,1,1).
+#   --seconds=1.0              BenchmarkTools per-bench wall-clock budget.
+#                              BenchmarkTools collects samples until either
+#                              this many seconds elapse or 10 000 samples
+#                              are taken, then reports min/median over them.
+#
 # Usage:
-#   julia benchmark/simple/bench_construction.jl
-#   julia benchmark/simple/bench_construction.jl --fixtures=bcc,fege
-#   julia benchmark/simple/bench_construction.jl --fixtures=bcc --repeat=2,2,2 --evals=5
+#   julia --project=benchmark benchmark/simple/bench_construction.jl
+#   julia --project=benchmark benchmark/simple/bench_construction.jl --fixtures=bcc,fege
+#   julia --project=benchmark benchmark/simple/bench_construction.jl --fixtures=bcc --repeat=2,2,2
 
 import Pkg
-Pkg.activate(joinpath(@__DIR__, "..", ".."))
+Pkg.activate(joinpath(@__DIR__, ".."))
 
 using Printf
 using SpinClusterMC
@@ -22,32 +30,23 @@ using SpinClusterMC.Simple
 
 include(joinpath(@__DIR__, "fixtures.jl"))
 
-function bench_fixture(xml::AbstractString, repeat::NTuple{3, Int}, n_eval::Int)
-    # Warm-up to absorb first-call compilation.
+function bench_fixture(xml::AbstractString, repeat::NTuple{3, Int}; seconds::Real)
+    # Inspect a sample build so we can print shape info alongside timings.
     h0 = SpinClusterHamiltonian(xml; repeat = repeat)
-
-    t_total = @elapsed for _ in 1:n_eval
-        SpinClusterHamiltonian(xml; repeat = repeat)
-    end
-    t_parse = @elapsed for _ in 1:n_eval
-        Simple.parse_jphi_xml(xml)
-    end
-    # CGTable build measured on the parsed SALC list to isolate it from XML I/O.
     data = Simple.parse_jphi_xml(xml)
-    t_cg = @elapsed for _ in 1:n_eval
-        Simple.build_cg_table(data.salcs)
-    end
+
+    r_total = simple_bench(() -> SpinClusterHamiltonian(xml; repeat = repeat); seconds = seconds)
+    r_parse = simple_bench(() -> Simple.parse_jphi_xml(xml);                   seconds = seconds)
+    r_cg    = simple_bench(() -> Simple.build_cg_table(data.salcs);            seconds = seconds)
 
     return (;
         xml,
         repeat,
-        n_atoms        = h0.n_atoms,
-        n_instances    = length(h0.instances),
-        n_salcs        = length(data.salcs),
-        max_l          = h0.max_l,
-        t_total_per    = t_total / n_eval,
-        t_parse_per    = t_parse / n_eval,
-        t_cg_per       = t_cg    / n_eval,
+        n_atoms     = h0.n_atoms,
+        n_instances = length(h0.instances),
+        n_salcs     = length(data.salcs),
+        max_l       = h0.max_l,
+        r_total, r_parse, r_cg,
     )
 end
 
@@ -55,19 +54,19 @@ function main()
     defaults = Dict(
         "fixtures" => "bcc,fege,ferh",
         "repeat"   => "1,1,1",
-        "evals"    => "3",
+        "seconds"  => "1.0",
     )
     opts = merge(defaults, simple_parse_args(ARGS))
 
-    names  = [Symbol(strip(s)) for s in split(opts["fixtures"], ",")]
-    repeat = simple_parse_repeat(opts["repeat"])
-    n_eval = parse(Int, opts["evals"])
-    n_eval > 0 || error("evals must be > 0, got: $n_eval")
+    names   = [Symbol(strip(s)) for s in split(opts["fixtures"], ",")]
+    repeat  = simple_parse_repeat(opts["repeat"])
+    seconds = parse(Float64, opts["seconds"])
+    seconds > 0 || error("seconds must be > 0, got: $seconds")
 
     println("=== bench_construction (Simple) ===")
     println("fixtures = ", names)
     println("repeat   = ", repeat)
-    println("evals    = ", n_eval)
+    println("budget   = ", seconds, " s/bench (BenchmarkTools wall-clock cap)")
     println()
 
     results = []
@@ -77,23 +76,38 @@ function main()
         xml = getproperty(SIMPLE_FIXTURES, name)
         print("$(rpad(string(name), 5)) ... ")
         flush(stdout)
-        r = bench_fixture(xml, repeat, n_eval)
+        r = bench_fixture(xml, repeat; seconds = seconds)
         push!(results, (; name, r...))
         println("done")
     end
 
     println()
-    @printf("%-6s %-8s %-12s %-7s %-6s %-14s %-14s %-14s\n",
-        "fixture", "n_atoms", "n_instances", "n_salcs", "max_l",
-        "total/build", "parse_xml", "cg_table")
-    println("-"^92)
+    @printf("%-6s %-7s %-12s %-7s %-6s\n",
+        "fixture", "n_atoms", "n_instances", "n_salcs", "max_l")
+    println("-"^45)
     for r in results
-        @printf("%-6s %-8d %-12d %-7d %-6d %-14s %-14s %-14s\n",
-            string(r.name), r.n_atoms, r.n_instances, r.n_salcs, r.max_l,
-            simple_fmt_time(r.t_total_per),
-            simple_fmt_time(r.t_parse_per),
-            simple_fmt_time(r.t_cg_per),
+        @printf("%-6s %-7d %-12d %-7d %-6d\n",
+            string(r.name), r.n_atoms, r.n_instances, r.n_salcs, r.max_l)
+    end
+    println()
+
+    @printf("%-6s %-9s %-12s %-12s %-10s %-10s\n",
+        "fixture", "stage", "t_min", "t_median", "allocs", "memory")
+    println("-"^68)
+    for r in results
+        for (stage, br) in (
+            ("build", r.r_total),
+            ("parse", r.r_parse),
+            ("cg",    r.r_cg),
         )
+            @printf("%-6s %-9s %-12s %-12s %-10d %-10s\n",
+                string(r.name), stage,
+                simple_fmt_time(br.t_min),
+                simple_fmt_time(br.t_median),
+                br.allocs,
+                simple_fmt_bytes(br.memory),
+            )
+        end
     end
 end
 

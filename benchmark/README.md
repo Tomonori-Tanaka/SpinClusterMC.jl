@@ -9,9 +9,23 @@ benchmark/
 └── simple/      # Simple submodule (readable reference; per-instance loop)
 ```
 
-Both trees use the same plain `@elapsed`-based style and a small
-`--key=value` CLI surface (no `BenchmarkTools` dependency). Pick the
-tree by which implementation you are profiling.
+The two trees use different timing tools today:
+
+- **`optimized/`** uses plain `@elapsed` against the root project env;
+  no extra deps.
+- **`simple/`** uses `BenchmarkTools` (per-call min/median + allocation
+  count + bytes) against [`./Project.toml`](Project.toml), a standalone
+  Pkg environment that pins `BenchmarkTools` (and any future profiling
+  tooling) without touching the main package's dependency graph.
+
+The split exists because Simple is now the basis for ongoing
+performance work — we need per-call allocation tracking to identify
+bottlenecks — whereas the optimized scripts are more about coarse
+production-path timing. Both still share fixtures (`test/bcc_2x2x2`,
+`test/fege_2x2x2`, `test/ferh_4x4x4`) and a `--fixtures=` style CLI so
+numbers are directly comparable across trees.
+
+Pick the tree by which implementation you are profiling.
 
 ## When to use which
 

@@ -141,16 +141,22 @@ Claude Code 内蔵の TaskCreate で管理し、ここには反映しない。�
       使い分けを表形式で説明
 
 設計判断:
-- BenchmarkTools 非依存 (optimized 側のスタイルに合わせて `@elapsed` + checksum)
+- **BenchmarkTools ベース** (初版は optimized 側に合わせて `@elapsed` だったが、
+  Simple が今後の perf work の基準になるため per-call allocation 計測が必須と判断し
+  切り替え)。`bench_compare.jl` で「fege の `total_energy` でアロケ 84 M / 1.76 GiB、
+  cached fast path との比 1.77e+06×」のような bottleneck signal が一目で見える。
+- 専用 Pkg env (`benchmark/Project.toml`) に BenchmarkTools / Carlo / SpinClusterMC を
+  集約。本体 `Project.toml` を汚さない。スクリプトは
+  `Pkg.activate(joinpath(@__DIR__, ".."))` で env を起動。
 - 共通 helper を `fixtures.jl` に集約: `SIMPLE_FIXTURES`, `simple_parse_args`,
-  `simple_parse_repeat`, `simple_random_spins`, `simple_fmt_time`, `simple_avg_time`
-- `simple_avg_time` は最初に 1 回 untimed warm-up を実行 (closure-specialization 等の
-  初期コストを timed loop から除外)
+  `simple_parse_repeat`, `simple_random_spins`, `simple_fmt_time`, `simple_fmt_bytes`,
+  `simple_bench` (BenchmarkTools wrapper, `BenchResult` を返す)
 - 各スクリプトの fixture loop ヘルパーは `bench_fixture(xml, repeat, ...)` で統一
 - `bench_compare.jl` の cached path は `_build_zlm_cache` の re-build を毎回含めて測る
   (`Carlo.init!` 内の実コストと同じ)
 - ferh は `bench_sweep` / `bench_compare` のデフォルトから除外 (`--fixtures=ferh` で
   個別指定可)。理由: 839 936 cluster instances + Simple 側 SH cache 未実装で時間がかかる。
+- profiling (Profile.@profile + flamegraph) は別件として後で追加。
 
 ### M10. 完了確認
 - [ ] requirements.md の「完了基準」全項目クリア

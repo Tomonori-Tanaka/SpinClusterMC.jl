@@ -3,19 +3,29 @@
 # Benchmark the four energy entry points exposed by the Simple submodule:
 #   - total_energy(h, spins)             O(n_instances)
 #   - local_energy(h, spins, i)          O(|atom_to_instance_indices[i]|)
-#   - delta_local_energy(h, spins, i, S) same as local but evaluates twice
+#   - delta_local_energy(h, spins, i, S) two local_energy evaluations
 #   - gradient(h, spins, i)              same loop, returns SVector{3}
 #
-# All four call the same kernel under the hood; the per-call cost ratio is
-# what is interesting (it tells you how much locality the
-# `atom_to_instance_indices` table is buying you on each fixture).
+# Reports per-call wall time (min / median), allocation count, and bytes
+# allocated. The local/total time ratio should roughly match
+# n_touch / n_instances; large allocation counts on `local`/`delta` are
+# the smoking gun for the SH-cache rebuild on every call.
+#
+# CLI options:
+#   --fixtures=bcc,fege,ferh   Comma-separated subset.
+#   --repeat=n1,n2,n3          Supercell repeat (default 1,1,1).
+#   --seconds=1.0              BenchmarkTools per-bench wall-clock budget.
+#                              BenchmarkTools collects samples until either
+#                              this many seconds elapse or 10 000 samples
+#                              are taken, then reports min/median over them.
+#   --seed=42                  RNG seed for the spin configuration.
 #
 # Usage:
-#   julia benchmark/simple/bench_energy.jl
-#   julia benchmark/simple/bench_energy.jl --fixtures=bcc,fege --evals=200
+#   julia --project=benchmark benchmark/simple/bench_energy.jl
+#   julia --project=benchmark benchmark/simple/bench_energy.jl --fixtures=bcc,fege
 
 import Pkg
-Pkg.activate(joinpath(@__DIR__, "..", ".."))
+Pkg.activate(joinpath(@__DIR__, ".."))
 
 using Printf
 using Random: MersenneTwister
@@ -25,40 +35,26 @@ using SpinClusterMC.Simple
 
 include(joinpath(@__DIR__, "fixtures.jl"))
 
-function bench_fixture(xml::AbstractString, repeat::NTuple{3, Int}, n_eval::Int, seed::Int)
+function bench_fixture(
+        xml::AbstractString, repeat::NTuple{3, Int}, seed::Int; seconds::Real,
+    )
     h = SpinClusterHamiltonian(xml; repeat = repeat)
     rng = MersenneTwister(seed)
     spins = simple_random_spins(rng, h.n_atoms)
     site = 1
     S_new = SVector{3, Float64}(0.0, 0.0, 1.0)
 
-    # Warm-up
-    total_energy(h, spins)
-    local_energy(h, spins, site)
-    delta_local_energy(h, spins, site, S_new)
-    gradient(h, spins, site)
+    r_total = simple_bench(() -> total_energy(h, spins);                    seconds = seconds)
+    r_local = simple_bench(() -> local_energy(h, spins, site);              seconds = seconds)
+    r_delta = simple_bench(() -> delta_local_energy(h, spins, site, S_new); seconds = seconds)
+    r_grad  = simple_bench(() -> gradient(h, spins, site);                  seconds = seconds)
 
-    t_total, _    = simple_avg_time(() -> total_energy(h, spins),               n_eval)
-    t_local, _    = simple_avg_time(() -> local_energy(h, spins, site),         n_eval)
-    t_delta, _    = simple_avg_time(() -> delta_local_energy(h, spins, site, S_new), n_eval)
-    # gradient returns SVector; checksum its sum so the call isn't elided.
-    # Wrap the loop call to share the warm-up convention with simple_avg_time.
-    grad_scalar = () -> begin
-        g = gradient(h, spins, site)
-        g[1] + g[2] + g[3]
-    end
-    t_grad, _ = simple_avg_time(grad_scalar, n_eval)
-
-    n_touch = length(h.atom_to_instance_indices[site])
     return (;
         xml,
         n_atoms     = h.n_atoms,
         n_instances = length(h.instances),
-        n_touch,
-        t_total_per = t_total,
-        t_local_per = t_local,
-        t_delta_per = t_delta,
-        t_grad_per  = t_grad,
+        n_touch     = length(h.atom_to_instance_indices[site]),
+        r_total, r_local, r_delta, r_grad,
     )
 end
 
@@ -66,21 +62,21 @@ function main()
     defaults = Dict(
         "fixtures" => "bcc,fege,ferh",
         "repeat"   => "1,1,1",
-        "evals"    => "50",
+        "seconds"  => "1.0",
         "seed"     => "42",
     )
     opts = merge(defaults, simple_parse_args(ARGS))
 
-    names  = [Symbol(strip(s)) for s in split(opts["fixtures"], ",")]
-    repeat = simple_parse_repeat(opts["repeat"])
-    n_eval = parse(Int, opts["evals"])
-    seed   = parse(Int, opts["seed"])
-    n_eval > 0 || error("evals must be > 0, got: $n_eval")
+    names   = [Symbol(strip(s)) for s in split(opts["fixtures"], ",")]
+    repeat  = simple_parse_repeat(opts["repeat"])
+    seconds = parse(Float64, opts["seconds"])
+    seed    = parse(Int, opts["seed"])
+    seconds > 0 || error("seconds must be > 0, got: $seconds")
 
     println("=== bench_energy (Simple) ===")
     println("fixtures = ", names)
     println("repeat   = ", repeat)
-    println("evals    = ", n_eval)
+    println("budget   = ", seconds, " s/bench (BenchmarkTools wall-clock cap)")
     println("seed     = ", seed)
     println()
 
@@ -91,30 +87,46 @@ function main()
         xml = getproperty(SIMPLE_FIXTURES, name)
         print("$(rpad(string(name), 5)) ... ")
         flush(stdout)
-        r = bench_fixture(xml, repeat, n_eval, seed)
+        r = bench_fixture(xml, repeat, seed; seconds = seconds)
         push!(results, (; name, r...))
         println("done")
     end
 
     println()
-    @printf("%-6s %-8s %-12s %-9s %-14s %-14s %-14s %-14s\n",
-        "fixture", "n_atoms", "n_instances", "n_touch",
-        "total/call", "local/call", "delta/call", "gradient/call")
-    println("-"^102)
+    @printf("%-6s %-7s %-12s %-9s\n",
+        "fixture", "n_atoms", "n_instances", "n_touch")
+    println("-"^40)
     for r in results
-        @printf("%-6s %-8d %-12d %-9d %-14s %-14s %-14s %-14s\n",
-            string(r.name), r.n_atoms, r.n_instances, r.n_touch,
-            simple_fmt_time(r.t_total_per),
-            simple_fmt_time(r.t_local_per),
-            simple_fmt_time(r.t_delta_per),
-            simple_fmt_time(r.t_grad_per),
+        @printf("%-6s %-7d %-12d %-9d\n",
+            string(r.name), r.n_atoms, r.n_instances, r.n_touch)
+    end
+    println()
+
+    @printf("%-6s %-9s %-12s %-12s %-10s %-10s\n",
+        "fixture", "op", "t_min", "t_median", "allocs", "memory")
+    println("-"^68)
+    for r in results
+        for (op, br) in (
+            ("total",    r.r_total),
+            ("local",    r.r_local),
+            ("delta",    r.r_delta),
+            ("gradient", r.r_grad),
         )
+            @printf("%-6s %-9s %-12s %-12s %-10d %-10s\n",
+                string(r.name), op,
+                simple_fmt_time(br.t_min),
+                simple_fmt_time(br.t_median),
+                br.allocs,
+                simple_fmt_bytes(br.memory),
+            )
+        end
     end
     println()
     println("Notes:")
     println("  n_touch = |atom_to_instance_indices[1]|, i.e. clusters touching site 1.")
-    println("  local/total ratio ~ n_touch / n_instances says how much locality saves.")
-    println("  delta ~ 2 × local (it evaluates local_energy at both old and new spin).")
+    println("  local/total ratio of t_min ~ n_touch / n_instances says how much locality saves.")
+    println("  High allocs on local/delta/gradient = per-call SphericalHarmonics rebuild;")
+    println("  it scales with n_atoms × (max_l+1)² and is the dominant Simple bottleneck.")
 end
 
 main()
