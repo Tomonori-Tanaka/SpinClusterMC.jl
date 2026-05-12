@@ -168,10 +168,10 @@ end
 # `<map atom="1">` rows; other atoms' destinations are inferred under the
 # assumption that all atoms translate rigidly by the same lattice vector.
 function _infer_atom_map_from_atom1!(
-    map_sym::Matrix{Int},
-    pos_frac::AbstractMatrix{Float64},
-    t::Int,
-    n_atoms::Int,
+        map_sym::Matrix{Int},
+        pos_frac::AbstractMatrix{Float64},
+        t::Int,
+        n_atoms::Int
 )
     j1 = map_sym[1, t]
     j1 == 0 && error("translation $t: missing map for atom 1, cannot infer other atoms")
@@ -282,14 +282,14 @@ function _parse_basis_node(basis_node, body::Int, Lf::Int)::SALCBasisData
     expected_lseq = max(0, body - 2)
     length(Lseq) == expected_lseq || throw(
         ArgumentError(
-            "basis Lseq length $(length(Lseq)) != expected $expected_lseq (body=$body)",
-        ),
+        "basis Lseq length $(length(Lseq)) != expected $expected_lseq (body=$body)",
+    ),
     )
     expected_weights = 2 * Lf + 1
     length(weights) == expected_weights || throw(
         ArgumentError(
-            "basis weights length $(length(weights)) != expected $expected_weights (Lf=$Lf)",
-        ),
+        "basis weights length $(length(weights)) != expected $expected_weights (Lf=$Lf)",
+    ),
     )
 
     return SALCBasisData(multiplicity, atoms, ls, Lseq, weights)
@@ -306,7 +306,8 @@ function parse_salc_list(xml_path::AbstractString)::Vector{SALCData}
     doc = readxml(xml_path)
     basisset_node = findfirst("//SCEBasisSet", doc)
     isnothing(basisset_node) && throw(ArgumentError("no //SCEBasisSet in $xml_path"))
-    num_salc_attr = haskey(basisset_node, "num_salc") ? parse(Int, basisset_node["num_salc"]) : -1
+    num_salc_attr = haskey(basisset_node, "num_salc") ?
+                    parse(Int, basisset_node["num_salc"]) : -1
 
     salc_nodes = findall("SALC", basisset_node)
     num_salc_attr == -1 || length(salc_nodes) == num_salc_attr ||
@@ -317,14 +318,14 @@ function parse_salc_list(xml_path::AbstractString)::Vector{SALCData}
         idx = parse(Int, sn["index"])
         body = parse(Int, sn["body"])
         Lf = parse(Int, sn["Lf"])
-        num_basis_attr =
-            haskey(sn, "num_basis") ? parse(Int, sn["num_basis"]) : -1
+        num_basis_attr = haskey(sn, "num_basis") ? parse(Int, sn["num_basis"]) : -1
         basis_nodes = findall("basis", sn)
-        num_basis_attr == -1 || length(basis_nodes) == num_basis_attr || throw(
-            ArgumentError(
+        num_basis_attr == -1 || length(basis_nodes) == num_basis_attr ||
+            throw(
+                ArgumentError(
                 "SALC index=$idx num_basis=$num_basis_attr but found $(length(basis_nodes)) basis entries",
             ),
-        )
+            )
         bases = [_parse_basis_node(bn, body, Lf) for bn in basis_nodes]
         push!(indexed, (idx, SALCData(body, Lf, bases)))
     end
@@ -378,8 +379,8 @@ function parse_jphi_xml(xml_path::AbstractString)::JPhiXMLData
             for a in basis.atoms
                 1 ≤ a ≤ system.n_atoms || throw(
                     ArgumentError(
-                        "SALC $s basis $b atom $a out of range 1:$(system.n_atoms)",
-                    ),
+                    "SALC $s basis $b atom $a out of range 1:$(system.n_atoms)",
+                ),
                 )
             end
         end

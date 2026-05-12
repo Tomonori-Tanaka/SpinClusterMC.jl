@@ -18,6 +18,16 @@
 - エクスポートされるAPIには明示的な型アノテーションとdocstringを使用する。
 - パフォーマンス改善の場合は、変更前後でベンチマークを取ること。
 
+## コードスタイル
+- **`src/simple/`, `test/simple/`, `test/parity/`** (および以降の simple-impl 関連の
+  新規ディレクトリ) は [SciML Style](https://github.com/SciML/SciMLStyle) に準拠する。
+  各ディレクトリに `.JuliaFormatter.toml` (`style = "sciml"`) を置いてあるので、
+  実装変更後は `julia --project=. -e 'using JuliaFormatter; format("src/simple")'`
+  などで整形する。
+- 既存の `src/JPhiMagestyCarlo.jl` / `src/xml_io.jl` / `src/template_energy.jl` /
+  `src/spin_utils.jl` は今のところ別スタイルなので一括フォーマットしない。
+  将来的にリポジトリ全体を統一する場合は別途決める。
+
 ## テスト
 
 テストは2層に分かれている：

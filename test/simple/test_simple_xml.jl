@@ -12,20 +12,20 @@ const SIMPLE = SpinClusterMC.Simple
             name = "bcc_2x2x2",
             path = joinpath(@__DIR__, "..", "bcc_2x2x2", "jphi.xml"),
             n_atoms = 16,
-            n_salcs = 2,
+            n_salcs = 2
         ),
         (
             name = "fege_2x2x2",
             path = joinpath(@__DIR__, "..", "fege_2x2x2", "jphi.xml"),
             n_atoms = 64,
-            n_salcs = 734,
+            n_salcs = 734
         ),
         (
             name = "ferh_4x4x4",
             path = joinpath(@__DIR__, "..", "ferh_4x4x4", "jphi.xml"),
             n_atoms = 128,
-            n_salcs = 488,
-        ),
+            n_salcs = 488
+        )
     ]
 
     for fix in fixtures
