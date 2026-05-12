@@ -161,8 +161,8 @@ system supply pre-converted numbers and use `:eV_per_muB`.
 # Examples
 
 ```julia
-# 1 Tesla along +z, Fe (2.2 μ_B) / Rh (0.5 μ_B) sublattices.
-moments = PerSiteMoment([i ≤ n_Fe ? 2.2 : 0.5 for i in 1:n_atoms])
+# 1 Tesla along +z, Fe (3.0 μ_B) / Rh (1.0 μ_B) sublattices (FM FeRh values).
+moments = PerSiteMoment([i ≤ n_Fe ? 3.0 : 1.0 for i in 1:n_atoms])
 z = Zeeman([0.0, 0.0, 1.0]; unit=:tesla, moments)
 
 # Already in eV/μ_B (default).

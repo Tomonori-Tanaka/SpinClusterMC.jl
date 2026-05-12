@@ -38,6 +38,8 @@ jobs:
       - uses: julia-actions/cache@v2
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
+      - name: Run fast examples (smoke)
+        run: make examples-smoke
 
   docs:
     name: Documentation

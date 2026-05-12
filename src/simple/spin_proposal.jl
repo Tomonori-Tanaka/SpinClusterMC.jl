@@ -74,9 +74,10 @@ end
     _propose_spin_geodesic(rng, u, theta_max) -> SVector{3, Float64}
 
 Propose `u' = cos(θ) u + sin(θ) t` with `t` a random unit tangent at `u`
-and `θ ∈ [-theta_max, theta_max]`. For moderate `theta_max` (~0.3 rad) the
-Metropolis acceptance is much higher than i.i.d. uniform spins because the
-local-energy change is small.
+and `θ ∈ [-theta_max, theta_max]`. `theta_max` is in **radians** (e.g.,
+`0.3` rad ≈ 17°, `π` rad gives near-uniform-sphere proposals). For
+moderate `theta_max` (~0.3 rad) the Metropolis acceptance is much higher
+than i.i.d. uniform spins because the local-energy change is small.
 
 If the random tangent happens to be (numerically) parallel to `u` the step
 falls back to a uniform-sphere sample. The `theta_max == 0` case is

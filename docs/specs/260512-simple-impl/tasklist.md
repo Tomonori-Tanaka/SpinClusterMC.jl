@@ -104,15 +104,29 @@ Claude Code 内蔵の TaskCreate で管理し、ここには反映しない。�
 - ExternalTerm は `external::Union{Nothing, ExternalTerm}`、`_external_*` dispatch
   helper で `Nothing` 経路を type-stable に no-op 化 (JET union split 対応)。
 
-### M8. Examples
-- [ ] `examples/01_quickstart.jl` (bcc_2x2x2)
-- [ ] `examples/02_cooling_run.jl` (T 高→低スキャン、CSV 出力)
-- [ ] `examples/03_anisotropy_demo.jl` (fege_2x2x2, Lf>0 の方向選好)
-- [ ] `examples/04_initial_spin_presets.jl` (`:random` / `:ferromagnetic` / SVector / Matrix)
-- [ ] `examples/05_custom_observable.jl` (ferh_4x4x4, Fe/Rh 副格子磁化を callback で追加)
-- [ ] `examples/README.md` (30 秒 quickstart + 30 分読む順序)
-- [ ] **G7**: CI smoke test を組み込み。`Makefile` に `make examples-smoke` を追加し
-      短時間 example (01, 04 等) のみ実行。`.github/workflows/CI.yml` に step 追加。
+### M8. Examples (完了: 2026-05-12)
+- [x] `examples/01_quickstart.jl` (bcc_2x2x2、SCEMC + Carlo manual loop)
+- [x] `examples/02_cooling_run.jl` (T 高→低 simulated annealing、`mc.T` mutation で
+      spin 状態を引き継ぎ、CSV 出力)
+- [x] `examples/03_anisotropy_demo.jl` (fege_2x2x2、Lf>0 で +x̂/+ŷ/+ẑ/diagonal の
+      energy 差を比較)
+- [x] `examples/04_initial_spin_presets.jl` (`init_spins` 全 mode: Symbol / Tuple /
+      AbstractVector / SVector / Matrix(base) / Matrix(supercell) / AbstractDict)
+- [x] `examples/05_custom_observable.jl` (ferh_4x4x4、`params[:extra_measure]`
+      callback で Fe/Rh 副格子磁化を記録。ferh の現状性能制約から sweep=1 は暫定値)
+- [x] `examples/README.md` (30 秒 quickstart + 30 分 reading order + 規約)
+- [x] **G7**: CI smoke test を組み込み。`Makefile` に `make examples-smoke` を追加し
+      短時間 example (01, 03, 04) のみ実行。`.github/workflows/CI.yml` に step 追加。
+
+設計判断:
+- 全 example が `SCEMC + Carlo.MCContext` の manual loop で構成 (Carlo の job runner
+  `Carlo.start(...)` は使わない、教材性優先)。
+- 各 example 冒頭に「Pedagogical vs production notes」を入れ、本番運用との差分
+  (raw sampling vs `Carlo.measure!` + binning、CSV vs HDF5 結果ファイル、等) を明示。
+- `:repeat` / `:external` / `:update_scheme` の **デフォルト値を全 example に明記**
+  (ユーザーが SCEMC の全 params を 1 つの dict から把握できる)。
+- 温度単位: `params[:T]` は Kelvin (constructor で eV 変換) を全 example で踏襲。
+- output ファイル (`cooling_results.csv` 等) は `.gitignore` で除外。
 
 ### M9. Benchmark
 - [ ] `benchmark/simple/fixtures.jl` (3 fixture ロード共通化)
@@ -142,4 +156,3 @@ Claude Code 内蔵の TaskCreate で管理し、ここには反映しない。�
 - M8〜M9 は M7 後にまとめて。
 - 各マイルストーン完了時に **テストが通ること**を確認してから次へ進む。
 - 中規模以上の判断 (e.g., `enabled_bodies` の要否) はその場で design.md に追記する。
-- ギャップ監査 (2026-05-12) の出処は `/Users/tomorin/.claude/plans/distributed-fluttering-robin.md`。

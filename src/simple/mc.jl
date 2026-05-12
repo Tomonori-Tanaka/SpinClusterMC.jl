@@ -29,7 +29,7 @@ for the wider convention.
 |---|---|---|
 | `:repeat` | `(1, 1, 1)` | Supercell tile factors. |
 | `:external` | `nothing` | An `ExternalTerm` (`Zeeman`, …) added on top of the SCE energy. |
-| `:spin_theta_max` | `π` | Geodesic proposal half-width; `π` ≈ uniform-sphere proposals. |
+| `:spin_theta_max` | `π` | Geodesic proposal half-width **in radians**; `π` ≈ uniform-sphere proposals, smaller values give finer local moves. |
 | `:renorm_every` | `1000` | Sweep cadence for spin renormalization and energy drift check. |
 | `:update_scheme` | `:metropolis` | Update algorithm; only `:metropolis` in v1. |
 | `:initial_spins` | `:random` | Initial spin spec; see `init_spins`. |

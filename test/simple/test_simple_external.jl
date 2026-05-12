@@ -51,7 +51,7 @@ end
     n_atoms = 6
     spins = _rand_unit_spins(rng, n_atoms)
     B = [0.1, -0.2, 0.5]
-    moments = [2.2, 0.5, 2.2, 0.5, 2.2, 0.5]  # alternating Fe / Rh-like
+    moments = [3.0, 1.0, 3.0, 1.0, 3.0, 1.0]  # alternating Fe / Rh-like (FM FeRh values)
     z = SIMPLE.Zeeman(B; moments = SIMPLE.PerSiteMoment(moments))
 
     # total = -Σ m_i (B·S_i)
@@ -181,8 +181,9 @@ end
     @test SIMPLE.total_energy(z_T, aligned) ≈
           -n_atoms * SIMPLE.BOHR_MAGNETON_EV_PER_TESLA rtol = 1.0e-14
 
-    # Fe / Rh sublattices: per-atom contribution scales with the moment.
-    moments = [2.2, 0.5, 2.2, 0.5]
+    # Fe / Rh sublattices: per-atom contribution scales with the moment
+    # (using FM FeRh experimental values, 3.0 μ_B / 1.0 μ_B).
+    moments = [3.0, 1.0, 3.0, 1.0]
     z_sub = SIMPLE.Zeeman(
         [0.0, 0.0, 1.0]; unit = :tesla, moments = SIMPLE.PerSiteMoment(moments)
     )
