@@ -34,6 +34,21 @@ the same result in that case (one tile = the whole supercell).
 
 `init_spins(params::AbstractDict, n_atoms, base_n_atoms; rng)` reads
 `params[:initial_spins]` and delegates, defaulting to `:random` when absent.
+
+# Reproducibility
+
+The `rng` kwarg controls the only source of randomness here. To get
+bit-identical results across runs, always pass an explicit `rng`, e.g.
+`init_spins(:random, n, n; rng = MersenneTwister(42))`. The default
+`Random.default_rng()` reads task-local state and is **not** reproducible
+across processes, threads, or even subsequent calls in the same session.
+For the strongest guarantee across Julia minor versions, use
+`MersenneTwister(seed)` (the stream is officially stability-guaranteed);
+`Xoshiro` may evolve between Julia releases.
+
+When this function is invoked from inside the MC engine (M7's
+`Carlo.init!`) the caller forwards the seeded `ctx.rng`, so the MC path is
+reproducible whenever Carlo is.
 """
 
 using LinearAlgebra: norm, dot
@@ -163,6 +178,12 @@ non-normalised directions freely.
 When `spec::AbstractDict` is given, the implementation reads
 `spec[:initial_spins]` and delegates, defaulting to `:random` if the key is
 absent.
+
+**Reproducibility**: the `rng` kwarg defaults to `Random.default_rng()`,
+which is *not* reproducible across processes or sessions. To get
+bit-identical initial spins, pass a seeded RNG explicitly — e.g.
+`init_spins(:random, n, n; rng = MersenneTwister(42))`. See the module
+docstring's "Reproducibility" section for details.
 """
 function init_spins(
         spec::Symbol,
