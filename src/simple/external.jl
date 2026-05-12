@@ -270,6 +270,27 @@ Change of `local_energy(i)` when atom `i`'s spin is replaced by `S_new`:
 
 assuming `m_i` is independent of `S` (true for `UniformMoment` and
 `PerSiteMoment`).
+
+# Future extension: `ClusterExpansionMoment`
+
+When `m_i` depends on the local cluster of spin directions (Magesty-side
+SCE-style moment expansion), flipping `S_i` changes `m_j` for every atom
+`j` whose cluster includes `i` as well as `m_i` itself. A future
+`ClusterExpansionMoment <: MomentModel` should ship with a specialized
+method dispatched on the type parameter,
+
+    function delta_local_energy(
+        ext::Zeeman{ClusterExpansionMoment}, spins, i, S_new
+    )
+        # Loop over j ∈ affected_sites(ext.moments, i):
+        #   - query m_j at the pre- and post-flip states of the local cluster
+        #   - accumulate (m_j^new · B·S_j^new) - (m_j^old · B·S_j^old)
+        # S_j^new == S_j^old for j ≠ i (single-spin Metropolis), so only
+        # the moment magnitudes differ at the cross-site terms.
+    end
+
+The single-spin sweep loop in `SCEMC` does not need to change; the entire
+cross-site bookkeeping is local to this method's body.
 """
 function delta_local_energy(
         ext::Zeeman,
@@ -293,9 +314,27 @@ end
     gradient(ext::Zeeman, spins, i) -> SVector{3, Float64}
 
 `∂(-m_i field · S_i) / ∂S_i = -m_i field`, assuming `m_i` is independent of
-`S_i` (true for `UniformMoment` and `PerSiteMoment`). A future
-`ClusterExpansionMoment` would need to add `-(field · S_i) · ∂m_i/∂S_i` and
-the cross-site contributions where `S_i` enters `m_j`.
+`S_i` (true for `UniformMoment` and `PerSiteMoment`).
+
+# Future extension: `ClusterExpansionMoment`
+
+When `m_j` depends on the local cluster including `S_i`, the gradient
+picks up two additional pieces:
+
+    ∂E / ∂S_i = -m_i · field                  # current term
+                -(field · S_i) · ∂m_i / ∂S_i  # local moment derivative
+                -Σ_{j: i ∈ cluster(j), j ≠ i}
+                    (field · S_j) · ∂m_j / ∂S_i
+
+A future `ClusterExpansionMoment <: MomentModel` should ship with a
+specialized method dispatched on the type parameter,
+
+    function gradient(ext::Zeeman{ClusterExpansionMoment}, spins, i)
+        # query ∂m_j / ∂S_i from the moment model and sum the three
+        # contributions above.
+    end
+
+so callers see no API change.
 """
 function gradient(
         ext::Zeeman, spins::AbstractMatrix{<:Real}, i::Integer

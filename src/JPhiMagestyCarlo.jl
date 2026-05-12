@@ -9,7 +9,7 @@ per-update `Vector` allocations in the tensor contraction). Optional task parame
 selects a local geodesic spin proposal instead of i.i.d. uniform-on-sphere draws.
 
 Real (tesseral) spherical harmonics use `SpheriCart.SphericalHarmonics` with its default
-`:L2` (L2-orthonormal) normalisation, which is bit-exact with Magesty's `Zₗₘ_unsafe` for
+`:L2` (L2-orthonormal) normalization, which is bit-exact with Magesty's `Zₗₘ_unsafe` for
 `l ≤ 3` — see `docs/zlm_convention_vs_sphericart.md`.
 """
 module JPhiMagestyCarlo

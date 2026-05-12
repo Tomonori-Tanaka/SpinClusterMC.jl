@@ -91,7 +91,7 @@ end
     @test all(spins[1, :] .≈ 1.0)
     @test all(spins[2:3, :] .≈ 0.0)
 
-    # Non-normalised vector — get normalised on the way in.
+    # Non-normalized vector — get normalized on the way in.
     spins = SIMPLE.init_spins([2.0, 0.0, 0.0], 3, 3)
     @test all(spins[1, :] .≈ 1.0)
 
@@ -102,7 +102,7 @@ end
 
 @testset "Simple.init_spins with Matrix (base or supercell)" begin
     # 3 × base path: tile across the supercell.
-    base = [1.0 0.0; 0.0 0.0; 0.0 2.0]   # second column is (0, 0, 2) → normalises to ẑ
+    base = [1.0 0.0; 0.0 0.0; 0.0 2.0]   # second column is (0, 0, 2) → normalizes to ẑ
     spins = SIMPLE.init_spins(base, 6, 2)
     @test size(spins) == (3, 6)
     # Even atoms (ib = 2) get ẑ; odd atoms (ib = 1) get x̂.
@@ -115,7 +115,7 @@ end
         end
     end
 
-    # 3 × n_atoms path: use as-is (after column normalisation).
+    # 3 × n_atoms path: use as-is (after column normalization).
     super = [1.0 0.0 0.5 -0.5; 0.0 1.0 0.5 -0.5; 0.0 0.0 sqrt(0.5) -sqrt(0.5)]
     n_atoms = 4
     spins = SIMPLE.init_spins(super, n_atoms, 2)
@@ -145,7 +145,7 @@ end
     @test_throws ArgumentError SIMPLE.init_spins(zeros(2, 4), 4, 4)
     # Matrix column count not matching base or supercell.
     @test_throws ArgumentError SIMPLE.init_spins(zeros(3, 5), 4, 2)
-    # Zero direction → can't normalise.
+    # Zero direction → can't normalize.
     @test_throws ArgumentError SIMPLE.init_spins((0.0, 0.0, 0.0), 3, 3)
     @test_throws ArgumentError SIMPLE.init_spins([0.0 1.0; 0.0 0.0; 0.0 0.0], 4, 2)
 end

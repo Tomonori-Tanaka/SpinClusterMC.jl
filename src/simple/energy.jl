@@ -28,7 +28,7 @@ per-Mf weights `salc_weights`, coupling constant `J`, and multiplicity `m`:
 
 `T_real` is `h.cg_table[(ls, Lf, Lseq)]`, the tesseral Clebsch-Gordan tensor.
 `Z_l^m` are the real (tesseral) spherical harmonics produced by SpheriCart
-with `:L2` normalisation. See Magesty technical notes for the SCE derivation:
+with `:L2` normalization. See Magesty technical notes for the SCE derivation:
 <https://Tomonori-Tanaka.github.io/Magesty.jl/technical_notes/>.
 """
 

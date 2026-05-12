@@ -16,7 +16,7 @@ energy code without intermediate allocations.
 # Initial spins
 
 `init_spins(spec, n_atoms, base_n_atoms; rng)` returns a `3 × n_atoms`
-`Matrix{Float64}` from a variety of user-facing specs, all renormalised to
+`Matrix{Float64}` from a variety of user-facing specs, all renormalized to
 unit columns. Supported forms:
 
 | Spec type | Meaning |
@@ -101,7 +101,7 @@ end
 
 function _normalize_direction(v::SVector{3, Float64})
     let n = norm(v)
-        n > 0 || throw(ArgumentError("direction has zero norm; cannot normalise"))
+        n > 0 || throw(ArgumentError("direction has zero norm; cannot normalize"))
         v / n
     end
 end
@@ -173,7 +173,7 @@ end
 Build the initial `3 × n_atoms` spin matrix from a user-facing specification.
 See the module docstring for the supported spec forms. The result has
 unit-norm columns regardless of the input scaling, so callers can pass
-non-normalised directions freely.
+non-normalized directions freely.
 
 When `spec::AbstractDict` is given, the implementation reads
 `spec[:initial_spins]` and delegates, defaulting to `:random` if the key is

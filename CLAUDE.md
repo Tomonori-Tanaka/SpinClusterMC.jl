@@ -28,6 +28,20 @@
   `src/spin_utils.jl` は今のところ別スタイルなので一括フォーマットしない。
   将来的にリポジトリ全体を統一する場合は別途決める。
 
+## 言語・用語規約
+
+- ソース・コメント・docstring・コミットメッセージ・PR は英語
+  (`feedback_comments_in_english.md`)。`docs/` 配下と会話のみ日本語可。
+- **アメリカ英語** で統一する: `normalize` / `normalization` / `behavior` /
+  `color` / `center` / `optimize` / `organize` / `favorite` / `canceled` 等。
+  British 綴り (`normalise` / `behaviour` 等) を新たに書かない。
+- 技術用語のハイフン規則: **"Monte Carlo"** (no hyphen) を採用。"Monte-Carlo" は使わない。
+- 例外: **外部 API の literal は元の綴りを保つ**。
+  - SpheriCart の `SphericalHarmonics(L; normalisation=:L2)` の kwarg 名 (`normalisation=`)。
+  - SpheriCart 内部ファイル名 `normalisations.jl` への参照。
+  - その他 upstream パッケージのシンボル名。
+  説明文の散文では American spelling を使い、コードリテラルだけ original を保つ。
+
 ## テスト
 
 テストは2層に分かれている：
