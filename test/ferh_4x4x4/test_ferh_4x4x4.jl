@@ -1,5 +1,6 @@
 using SpinClusterMC.JPhiMagestyCarlo
 using Carlo
+using SpheriCart: SphericalHarmonics
 using Test
 using Random
 using Statistics
@@ -34,8 +35,9 @@ end
 
     max_l = JMCC._max_l_in_instances(cache.instances)
     zlm   = JMCC._alloc_zlm_cache(h.n_atoms, max_l)
+    sph   = SphericalHarmonics(max_l)
     for ia in 1:h.n_atoms
-        JMCC._update_atom_zlm_cache!(zlm, ia, @view(spins[:, ia]), max_l)
+        JMCC._update_atom_zlm_cache!(zlm, ia, @view(spins[:, ia]), sph)
     end
 
     active_body_indices = collect(eachindex(cache.body_list))
@@ -60,7 +62,7 @@ end
         sx, sy, sz = JMCC._rand_unit_spin(rng)
         spins_new[1, atom] = sx; spins_new[2, atom] = sy; spins_new[3, atom] = sz
 
-        JMCC._update_atom_zlm_cache!(zlm, atom, @view(spins_new[:, atom]), max_l)
+        JMCC._update_atom_zlm_cache!(zlm, atom, @view(spins_new[:, atom]), sph)
 
         E_new_local = sum(
             cache.instances[idx].prefactor *
@@ -78,6 +80,6 @@ end
         spins_new[1, atom] = spins[1, atom]
         spins_new[2, atom] = spins[2, atom]
         spins_new[3, atom] = spins[3, atom]
-        JMCC._update_atom_zlm_cache!(zlm, atom, @view(spins[:, atom]), max_l)
+        JMCC._update_atom_zlm_cache!(zlm, atom, @view(spins[:, atom]), sph)
     end
 end
