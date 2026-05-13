@@ -53,8 +53,8 @@
 ## テスト
 
 テストは2層に分かれている：
-- **通常テスト**（`make test`）: ~10秒。日常的な開発で使用する。
-- **重い検証テスト**（`make test-slow`）: ~4分。`ferh_4x4x4`（128原子）を使った数値精度の検証。アルゴリズム変更時に実行する。
+- **通常テスト**（`make test`）: ~2分。Simple/JPhiSpinMC 両実装 + bcc/fege parity + JET 静的解析を含む。日常的な開発で使用する。
+- **重い検証テスト**（`make test-slow`）: ~7分。上記に加えて `ferh_4x4x4`（128原子、839 936 cluster instances）での simple↔optimized parity を実行する。アルゴリズム変更時に実行する。
 
 ## 物理規約
 

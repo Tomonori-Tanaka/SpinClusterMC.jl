@@ -86,40 +86,49 @@
 
 ### 機能完了
 
-- [ ] `using SpinClusterMC.Simple` で公開 API がロードできる
-- [ ] `examples/01_*.jl` … `examples/05_*.jl` が `julia --project=. examples/0N_*.jl`
-      でエラーなく走る
-- [ ] 既存 `JPhiSpinMC` と新 `Simple.SCEMC` が `bcc_2x2x2`, `fege_2x2x2`,
-      `ferh_4x4x4` 全てで `make test` を通過
+- [x] `using SpinClusterMC.Simple` で公開 API がロードできる (M1, 2026-05-12)
+- [x] `examples/01_*.jl` … `examples/05_*.jl` が `julia --project=. examples/0N_*.jl`
+      でエラーなく走る (M8, 2026-05-12; CI smoke via `make examples-smoke`)
+- [x] 既存 `JPhiSpinMC` と新 `Simple.SCEMC` が `bcc_2x2x2`, `fege_2x2x2`,
+      `ferh_4x4x4` 全てで `make test` / `make test-slow` を通過
+      (M10, 2026-05-13)
 
 ### 数値整合性 (vs `JPhiMagestyCarlo`)
 
-| 比較対象 | 規約 |
-|---|---|
-| `total_energy` | `rtol = 1e-8` |
-| `local_energy` | `rtol = 1e-10` |
-| `delta_local_energy` (ΔE) | `rtol = 1e-7` |
-| Zlm 出力 (`compute(sph, S)`) | `atol = 0` (bit-exact) |
-| `:Magnetization` 系列 (同 seed, 同 sweeps) | `rtol = 1e-8` |
-| `:SpecificHeat` / `:BinderRatio` / `:Susceptibility` (同 seed, 同 sweeps) | `rtol = 1e-7` |
+| 比較対象 | 規約 | 状態 |
+|---|---|---|
+| `total_energy` | `rtol = 1e-8` | ✅ bcc/fege/ferh parity 通過 |
+| `local_energy` | `rtol = 1e-10` | (間接) optimized に公開 `local_energy` がないため `delta_local_energy` 経由で間接検証 |
+| `delta_local_energy` (ΔE) | `rtol = 1e-7` | ✅ bcc/fege/ferh parity 通過 |
+| Zlm 出力 (`compute(sph, S)`) | `atol = 0` (bit-exact) | ✅ 両実装が同じ SpheriCart `SphericalHarmonics` を共有するため bit-exact |
+| `:Magnetization` 系列 (同 seed, 同 sweeps) | `rtol = 1e-8` | 未実施 (ΔE が parity していれば同 RNG 軌道は一致するはずだが、明示的 trajectory 比較テストは未追加) |
+| `:SpecificHeat` / `:BinderRatio` / `:Susceptibility` (同 seed, 同 sweeps) | `rtol = 1e-7` | 同上 |
 
 これらは既存テストの規約 (test/runtests.jl:144, 165, 194, 255) と整合させる。
 bit-exact なエネルギー一致は要求しない (両実装で和の集約順序が異なるため)。
 
+trajectory parity の明示テストは future-work メモ ([design_notes.md](../../design_notes.md))
+に積む。ΔE parity (`rtol=1e-7`) が通っているので、同 seed の Metropolis 軌跡は
+acceptance 判定段階まで一致しうるが、丸め誤差による発散点の確認は別タスク。
+
 ### 教材性チェック
 
-- [ ] `src/simple/` 配下だけ読めば実装が理解できる (XML parser・型を含む独立した実装)
-- [ ] 数式を実装する関数 (`cluster_energy`, `local_energy`, ...) の docstring に
-      LaTeX 数式 + Magesty docs / SCE 論文への参照
-- [ ] `examples/` README に「30 秒で動かす」「30 分かけて読む順序」併記
+- [x] `src/simple/` 配下だけ読めば実装が理解できる (XML parser・型を含む独立した実装)
+- [x] 数式を実装する関数 (`cluster_energy`, `local_energy`, ...) の docstring に
+      LaTeX 数式 + Magesty docs / SCE 論文への参照 (M4)
+- [x] `examples/` README に「30 秒で動かす」「30 分かけて読む順序」併記 (M8)
 
 ### ベンチマーク
 
-- [ ] `benchmark/simple/` が `benchmark/optimized/` と同じ fixture
+- [x] `benchmark/simple/` が `benchmark/optimized/` と同じ fixture
       (`bcc_2x2x2`, `fege_2x2x2`, `ferh_4x4x4`) で走り、比率
-      `simple / optimized` を出力する
+      `simple / optimized` を出力する (M9, `bench_compare.jl`)
 - [ ] 性能比 `simple / optimized` が ~ 10〜30× に収まる
-      (絶対値は問わない、構造由来の遅さの分布が解析可能であればよい)
+      → **未達**。`bench_compare.jl` の実測では fege `total_energy` で alloc 比
+      1.77e+06× / 時間比 10³ 程度 (Simple が SH cache を毎回再生成するため)。
+      ボトルネックは特定済み (`design_notes.md` "SphericalHarmonics の使い回し")
+      なので、構造由来の遅さの分布が解析可能というゆるい基準は満たす。
+      数値の改善は別 spec で追跡する。
 
 ## 参考文献
 

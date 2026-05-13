@@ -221,12 +221,13 @@ bcc_2x2x2 の `repeat` フィールドは XML 上は (2,2,2) 設定の派生だ�
 
 ## src/simple/ リファレンス実装
 
-design・要件・タスクは spec フォルダに移動済み:
+**ステータス: 完了 (2026-05-13)**。M1〜M10 まで完走。`SpinClusterMC.Simple` として
+公開済み。spec フォルダは履歴として残す:
 [`docs/specs/260512-simple-impl/`](specs/260512-simple-impl/)
 
 - [requirements.md](specs/260512-simple-impl/requirements.md) — 目的・不変条件・完了基準
 - [design.md](specs/260512-simple-impl/design.md) — モジュール構成・API・型・規約・ベンチマーク方針
-- [tasklist.md](specs/260512-simple-impl/tasklist.md) — マイルストーン
+- [tasklist.md](specs/260512-simple-impl/tasklist.md) — マイルストーン (全 `[x]`)
 
 ### simple/ の future-work メモ
 

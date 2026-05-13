@@ -4,6 +4,7 @@ Pkg.develop(Pkg.PackageSpec(path = joinpath(@__DIR__, "..")))
 Pkg.instantiate()
 using SpinClusterMC
 using SpinClusterMC.JPhiMagestyCarlo
+using SpinClusterMC.Simple
 using Documenter
 
 DocMeta.setdocmeta!(
@@ -12,10 +13,16 @@ DocMeta.setdocmeta!(
     :(using SpinClusterMC.JPhiMagestyCarlo);
     recursive = true,
 )
+DocMeta.setdocmeta!(
+    SpinClusterMC.Simple,
+    :DocTestSetup,
+    :(using SpinClusterMC.Simple);
+    recursive = true,
+)
 
 makedocs(
     sitename = "SpinClusterMC.jl",
-    modules = [SpinClusterMC.JPhiMagestyCarlo],
+    modules = [SpinClusterMC.JPhiMagestyCarlo, SpinClusterMC.Simple],
     remotes = nothing,
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", "false") == "true",
