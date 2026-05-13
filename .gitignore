@@ -26,3 +26,7 @@ examples/*.h5
 !.claude/settings.json
 
 .DS_Store
+
+# Benchmark run output: noisy, machine-dependent. Track baselines with
+# `git add -f benchmark/results/<file>.md` when committing a milestone snapshot.
+benchmark/results/*.md
