@@ -298,20 +298,20 @@ end
 """
     parse_salc_list(xml_path) -> Vector{SALCData}
 
-Parse the `<SCEBasisSet>` block: one `SALCData` per `<SALC>` element, with all
+Parse the `<SCEBasis>` block: one `SALCData` per `<SALC>` element, with all
 `<basis>` children attached. SALCs are returned in the order their `index`
 attribute defines (validated as contiguous `1..num_salc`).
 """
 function parse_salc_list(xml_path::AbstractString)::Vector{SALCData}
     doc = readxml(xml_path)
-    basisset_node = findfirst("//SCEBasisSet", doc)
-    isnothing(basisset_node) && throw(ArgumentError("no //SCEBasisSet in $xml_path"))
+    basisset_node = findfirst("//SCEBasis", doc)
+    isnothing(basisset_node) && throw(ArgumentError("no //SCEBasis in $xml_path"))
     num_salc_attr = haskey(basisset_node, "num_salc") ?
                     parse(Int, basisset_node["num_salc"]) : -1
 
     salc_nodes = findall("SALC", basisset_node)
     num_salc_attr == -1 || length(salc_nodes) == num_salc_attr ||
-        throw(ArgumentError("SCEBasisSet num_salc=$num_salc_attr but found $(length(salc_nodes)) SALC entries"))
+        throw(ArgumentError("SCEBasis num_salc=$num_salc_attr but found $(length(salc_nodes)) SALC entries"))
 
     indexed = Tuple{Int, SALCData}[]
     for sn in salc_nodes
