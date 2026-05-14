@@ -32,7 +32,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/no-git-push.sh"
+            "command": ".claude/hooks/confirm-git.py"
           }
         ]
       }

@@ -11,7 +11,10 @@
   1. 結果が変わる理由の簡潔な説明
   2. リグレッションまたは検証テスト
   3. ユーザー向けの場合はdocs/examplesの更新
-- GitHubにpushしない
+- git 操作（push / commit / merge / rebase / reset / checkout など変更を伴うもの）は
+  必ずユーザーの確認を取ってから実行する。`.claude/hooks/confirm-git.py` が
+  PreToolUse で該当コマンドを検出し確認プロンプトを出す（read-only な status / diff /
+  log 等は対象外）。
 
 ## 実装規約
 - 隠れたグローバル状態を避ける。
