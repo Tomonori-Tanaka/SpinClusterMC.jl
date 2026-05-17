@@ -5,4 +5,5 @@ SpinClusterMC = "e9b40308-012f-49ab-9d45-cb028b7a04e4"
 
 
 [compat]
+Documenter = "1.17.0"
 LiveServer = "1.5.0"
