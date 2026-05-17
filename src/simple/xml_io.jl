@@ -5,7 +5,7 @@ that the M3 type layer turns into `SpinClusterHamiltonian` / `ClusterInstance`.
 
 The XML grammar matches the existing fixtures under `test/<lattice>/jphi.xml`.
 See `docs/specs/260512-simple-impl/design.md` for the schema. Field semantics follow Magesty's `CoupledBasis_with_coefficient`
-(`Magesty/src/types/Basis.jl`).
+(`Magesty/src/CoupledBases.jl`).
 """
 
 using EzXML: readxml, findfirst, findall, nodecontent

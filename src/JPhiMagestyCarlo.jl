@@ -23,7 +23,7 @@ using Random
 using StaticArrays
 import Serialization
 
-using Magesty.Basis: CoupledBasis_with_coefficient
+using Magesty.CoupledBases: CoupledBasis_with_coefficient
 using Magesty.XMLIO: read_salcbasis_from_xml
 using SpheriCart: SphericalHarmonics, compute, compute!
 
