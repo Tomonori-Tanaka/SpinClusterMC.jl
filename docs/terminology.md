@@ -49,6 +49,41 @@ jphi.xml の `<basis atoms="i j ...">` で指定される原子インデック�
 - `coeff_flat`, `dims`, `strides`, `prefactor`：テンソル収縮に使うデータ
   （同じクラスター型の全インスタンスで共通）
 
+### body / N-body cluster
+
+クラスターが触れる**サイト数** `N = length(atoms)`。XML では `<SALC body="N">` 属性として直接記録される。
+
+- `body = 1`：単一サイト項（例：単一イオン異方性）
+- `body = 2`：2 体項（pair / bond、Heisenberg 結合など）
+- `body = 3`：3 体項（triplet）
+- `body ≥ 4`：高次
+
+SCE は `body` および `l_max` に上限を置かない。
+
+### uniform body / mixed body Hamiltonian
+
+- **uniform body**: ハミルトニアン内の全 `ClusterInstance` が同じ `N` を持つ
+  状態（例：`bcc_2x2x2`, `fege_2x2x2` はいずれも全 SALC が `body = 2`）。
+  単純な恒等式
+
+  ```
+  Σ_i local_energy(i) = N · total_energy
+  ```
+
+  が成立する。
+- **mixed body**: 異なる `N` の cluster が混在する状態（例：`ferh_4x4x4` は
+  `body = 2` と `body = 3` を含む）。一般化された恒等式
+
+  ```
+  Σ_i local_energy(i) = Σ_inst length(inst.atoms) · E_inst
+  ```
+
+  が成立するが、単一の `N` で割って `total_energy` を復元することはできない。
+
+この区別は内部整合テスト（`sum_local / N = total`）の前提として
+`test/simple/test_simple_energy.jl`, `test/parity/test_parity_{bcc,fege}.jl`
+で参照される。
+
 ---
 
 ## コード中の対応関係

@@ -1,9 +1,11 @@
 module SpinClusterMC
 
 include("JPhiMagestyCarlo.jl")
+include("simple/Simple.jl")
 
 using .JPhiMagestyCarlo
+using .Simple
 
-export JPhiMagestyCarlo
+export JPhiMagestyCarlo, Simple
 
 end

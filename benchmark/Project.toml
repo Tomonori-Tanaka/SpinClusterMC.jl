@@ -1,0 +1,19 @@
+# Standalone Pkg environment for benchmark/ scripts so that BenchmarkTools
+# and any future profiling deps (ProfileView, PProf, …) stay out of the
+# main package. Activate from each script via
+# `Pkg.activate(joinpath(@__DIR__, ".."))`. No `name`/`uuid` is set on
+# purpose: this directory is not itself a package, just an environment.
+
+[deps]
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+Carlo = "780c37f4-4e5a-43de-9e79-65c261e525a4"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
+SpheriCart = "5caf2b29-02d9-47a3-9434-5931c85ba645"
+SpinClusterMC = "e9b40308-012f-49ab-9d45-cb028b7a04e4"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
+[sources]
+SpinClusterMC = {path = ".."}

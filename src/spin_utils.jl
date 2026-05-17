@@ -82,7 +82,7 @@ end
 # cache columns can be written straight through without remapping.
 # Bit-exact agreement with Magesty's `Zₗₘ_unsafe` is verified in
 # docs/zlm_convention_vs_sphericart.md (max |Δ| ≤ 3.3e-16 for l ≤ 3) for
-# SpheriCart's default `:L2` normalisation, which we rely on here.
+# SpheriCart's default `:L2` normalization, which we rely on here.
 #
 # Note: SpheriCart's `STATIC=true` (SVector return) only holds for `max_l ≤ 15`.
 # Above that, `compute(sph, u)` allocates a `Vector{Float64}` and this code path

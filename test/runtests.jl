@@ -478,6 +478,16 @@ end
 
     include("bcc_2x2x2/test_bcc_2x2x2.jl")
 
+    # Simple submodule tests (independent reference implementation).
+    include("simple/test_simple_xml.jl")
+    include("simple/test_simple_cg.jl")
+    include("simple/test_simple_energy.jl")
+    include("simple/test_simple_external.jl")
+    include("simple/test_simple_spin_proposal.jl")
+    include("simple/test_simple_mc.jl")
+    include("parity/test_parity_bcc.jl")
+    include("parity/test_parity_fege.jl")
+
     if isfile(joinpath(@__DIR__, "fege_2x2x2", "jphi.xml"))
         include("fege_2x2x2/test_fege_2x2x2.jl")
     else
@@ -487,6 +497,7 @@ end
     if "slow" in ARGS
         if isfile(joinpath(@__DIR__, "ferh_4x4x4", "jphi.xml"))
             include("ferh_4x4x4/test_ferh_4x4x4.jl")
+            include("parity/test_parity_ferh.jl")
         else
             @warn "Skipping ferh_4x4x4 tests: test/ferh_4x4x4/jphi.xml not found"
         end
@@ -500,7 +511,11 @@ end
         import JET
         result = JET.report_package(
             SpinClusterMC;
-            target_modules = (SpinClusterMC, SpinClusterMC.JPhiMagestyCarlo),
+            target_modules = (
+                SpinClusterMC,
+                SpinClusterMC.JPhiMagestyCarlo,
+                SpinClusterMC.Simple,
+            ),
         )
         reports = JET.get_reports(result)
         for r in reports

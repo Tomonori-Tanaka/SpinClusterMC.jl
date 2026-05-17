@@ -13,7 +13,7 @@ SpinClusterMC.jl のテストランナーエージェント。テストを実行
 
 ## テストの実行方法
 
-作業ディレクトリ: `/Users/tomorin/Packages/SpinClusterMC.jl`
+作業ディレクトリ: リポジトリのルート (`SpinClusterMC.jl/`)。
 
 - 通常テスト（~10秒）: `make test`
 - 重い検証テスト（~1m40s）: `make test-slow`

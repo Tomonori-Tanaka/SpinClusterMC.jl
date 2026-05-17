@@ -1,7 +1,7 @@
 """
 	JPhiMagestyCarlo
 
-Reads Magesty `jphi.xml` (`SCEBasisSet`, `AngularMomentumCouplings`, `JPhi`), evaluates SCE energy
+Reads Magesty `jphi.xml` (`SCEBasis`, `AngularMomentumCouplings`, `JPhi`), evaluates SCE energy
 in spin directions with the same contract as `Magesty.Optimize.design_matrix_energy_element`, and
 provides a thin [`Carlo`](https://github.com/lattice-quantum/Carlo.jl) `AbstractMC` adapter with
 single-spin Metropolis updates. Local energy deltas reuse preallocated stride / index buffers (no
@@ -9,7 +9,7 @@ per-update `Vector` allocations in the tensor contraction). Optional task parame
 selects a local geodesic spin proposal instead of i.i.d. uniform-on-sphere draws.
 
 Real (tesseral) spherical harmonics use `SpheriCart.SphericalHarmonics` with its default
-`:L2` (L2-orthonormal) normalisation, which is bit-exact with Magesty's `Zₗₘ_unsafe` for
+`:L2` (L2-orthonormal) normalization, which is bit-exact with Magesty's `Zₗₘ_unsafe` for
 `l ≤ 3` — see `docs/zlm_convention_vs_sphericart.md`.
 """
 module JPhiMagestyCarlo
@@ -23,8 +23,8 @@ using Random
 using StaticArrays
 import Serialization
 
-using Magesty.Basis: CoupledBasis_with_coefficient
-using Magesty.XMLIO: read_basisset_from_xml
+using Magesty.CoupledBases: CoupledBasis_with_coefficient
+using Magesty.XMLIO: read_salcbasis_from_xml
 using SpheriCart: SphericalHarmonics, compute, compute!
 
 export SCEHamiltonian,
@@ -195,7 +195,7 @@ function load_sce_hamiltonian(
     repeat::NTuple{3, Int} = (1, 1, 1),
 )::SCEHamiltonian
     all(r -> r ≥ 1, repeat) || throw(ArgumentError("repeat must be positive integers, got $repeat"))
-    basis = read_basisset_from_xml(xml_path)
+    basis = read_salcbasis_from_xml(xml_path)
     sys = parse_system_xml(xml_path)
     jphi = read_jphi_coefficients(xml_path)
     length(jphi) == length(basis.salc_list) ||
