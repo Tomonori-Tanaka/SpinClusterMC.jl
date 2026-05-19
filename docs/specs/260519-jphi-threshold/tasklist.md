@@ -46,10 +46,10 @@
 
 ## M3: Parity + slow テスト
 
-- [ ] `test/parity/test_jphi_threshold_parity.jl`: 同じ threshold で
-      Simple と optimized の `total_energy` が parity 範囲内で一致。
-- [ ] 境界値テスト: `threshold` を fixture の `jphi[s]` の正確な絶対値に
-      合わせ、Simple / optimized が両方とも「≥ で keep」の判定で
+- [x] (2026-05-19) `test/parity/test_jphi_threshold_parity.jl`: 同じ threshold
+      で Simple と optimized の `total_energy` が parity 範囲内で一致。
+- [x] (2026-05-19) 境界値テスト: `threshold` を fixture の `jphi[s]` の正確な
+      絶対値に合わせ、Simple / optimized が両方とも「≥ で keep」の判定で
       同じ keep mask を返すこと (浮動小数表現の一致を担保)。
-- [ ] `make test` 全体 pass、`make test-slow` も pass。
-- [ ] `code-reviewer` エージェントで差分レビュー。
+- [x] (2026-05-19) `make test` 全体 pass、`make test-slow` も pass。
+- [x] (2026-05-19) `code-reviewer` エージェントで差分レビュー。
