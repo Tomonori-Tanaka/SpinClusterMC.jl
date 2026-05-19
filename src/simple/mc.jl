@@ -28,6 +28,7 @@ for the wider convention.
 | Key | Default | Meaning |
 |---|---|---|
 | `:repeat` | `(1, 1, 1)` | Supercell tile factors. |
+| `:jphi_threshold` | `0.0` | Drop SALCs with `|J_s| < jphi_threshold` (eV). Use with sparse-modeled `jphi.xml`. See `SpinClusterHamiltonian`. |
 | `:external` | `nothing` | An `ExternalTerm` (`Zeeman`, …) added on top of the SCE energy. |
 | `:spin_theta_max` | `π` | Geodesic proposal half-width **in radians**; `π` ≈ uniform-sphere proposals, smaller values give finer local moves. |
 | `:renorm_every` | `1000` | Sweep cadence for spin renormalization and energy drift check. |
@@ -122,6 +123,14 @@ mutable struct SCEMC{E <: Union{Nothing, ExternalTerm}} <: Carlo.AbstractMC
     repeat::NTuple{3, Int}
 end
 
+function _params_jphi_threshold(params::AbstractDict)::Float64
+    thr = Float64(get(params, :jphi_threshold, 0.0))
+    thr ≥ 0 || throw(
+        ArgumentError("SCEMC: params[:jphi_threshold] must be non-negative, got $thr")
+    )
+    return thr
+end
+
 function _params_repeat(params::AbstractDict)::NTuple{3, Int}
     rep = get(params, :repeat, (1, 1, 1))
     if rep isa NTuple{3, Int}
@@ -182,7 +191,8 @@ function SCEMC(params::AbstractDict)
     )
     )
 
-    h = SpinClusterHamiltonian(xml_path; repeat = repeat)
+    jphi_threshold = _params_jphi_threshold(params)
+    h = SpinClusterHamiltonian(xml_path; repeat = repeat, jphi_threshold = jphi_threshold)
     spins = Matrix{Float64}(undef, 3, h.n_atoms)
     return SCEMC(
         h,
@@ -325,11 +335,14 @@ function Carlo.register_evaluables(
     T_eV = _params_T_eV(params)
     xml_path = String(params[:xml_path])
     repeat = _params_repeat(params)
+    jphi_threshold = _params_jphi_threshold(params)
     # n_atoms is needed for the per-atom -> total conversion in the
     # specific-heat and susceptibility formulas. The MC instance isn't
     # passed here, so we rebuild a Hamiltonian shell (cheap relative to the
-    # whole simulation) to read it.
-    h = SpinClusterHamiltonian(xml_path; repeat = repeat)
+    # whole simulation) to read it. `jphi_threshold` does not affect n_atoms
+    # but we pass it for consistency so the rebuilt Hamiltonian matches the
+    # one held by SCEMC (e.g. for any user-side introspection).
+    h = SpinClusterHamiltonian(xml_path; repeat = repeat, jphi_threshold = jphi_threshold)
     n = h.n_atoms
     evaluate!(eval, :SpecificHeat, (:Energy2, :Energy)) do e2, e
         return n * (e2 - e * e) / (T_eV * T_eV)

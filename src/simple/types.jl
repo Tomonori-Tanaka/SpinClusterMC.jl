@@ -271,13 +271,17 @@ function _generate_instances(
         map_sym::AbstractMatrix{Int},
         base_pos_frac::AbstractMatrix{Float64},
         base_n::Int,
-        repeat::NTuple{3, Int}
+        repeat::NTuple{3, Int};
+        jphi_threshold::Float64 = 0.0
 )::Vector{ClusterInstance}
     n1, n2, n3 = repeat
     n_trans = size(map_sym, 2)
     instances = ClusterInstance[]
     for (s, salc) in enumerate(salcs)
         J = jphi[s]
+        # `abs(J) < 0.0` is always false, so threshold=0.0 keeps every SALC
+        # bit-exactly (no early `continue` fires).
+        abs(J) < jphi_threshold && continue
         for basis in salc.bases
             ls_v = collect(Int, basis.ls)
             seen = Set{Tuple{Vector{Int}, Vector{Int}}}()
@@ -323,26 +327,66 @@ function _generate_instances(
 end
 
 """
-    SpinClusterHamiltonian(xml_path; repeat=(1, 1, 1)) -> SpinClusterHamiltonian
+    SpinClusterHamiltonian(xml_path; repeat=(1, 1, 1), jphi_threshold=0.0)
+        -> SpinClusterHamiltonian
 
 Load a Magesty `jphi.xml` and build the full Hamiltonian: parse the XML,
 generate one `ClusterInstance` per `(SALC basis, translation, tile)` triple
 (with per-basis deduplication), and build the tesseral CG table.
+
+# Arguments
+
+- `repeat`: Supercell tile factors `(n_1, n_2, n_3)`; all entries must be `≥ 1`.
+- `jphi_threshold`: Drop SALCs with `|J_s| < jphi_threshold` (eV) before
+  building cluster instances. Use this to skip near-zero couplings produced
+  by sparse-modeled `jphi.xml`. Must be non-negative. Default `0.0` keeps
+  every SALC, including those with `J_s = 0.0` exactly (`abs(0) ≥ 0`); pass
+  `eps()` or `nextfloat(0.0)` to drop strict zeros. Throws `ArgumentError`
+  if every SALC is filtered out.
 """
 function SpinClusterHamiltonian(
         xml_path::AbstractString;
-        repeat::NTuple{3, Int} = (1, 1, 1)
+        repeat::NTuple{3, Int} = (1, 1, 1),
+        jphi_threshold::Real = 0.0
 )::SpinClusterHamiltonian
     all(>(0), repeat) || throw(
         ArgumentError("repeat factors must be positive integers, got $repeat")
     )
+    thr = Float64(jphi_threshold)
+    thr ≥ 0 ||
+        throw(ArgumentError("jphi_threshold must be non-negative, got $thr"))
     data = parse_jphi_xml(xml_path)
     base_n = data.system.n_atoms
     n1, n2, n3 = repeat
     n_super = base_n * n1 * n2 * n3
+    # Short-circuit when thr == 0.0: skip the filter accounting and log so the
+    # code path matches the pre-threshold behavior exactly.
+    if thr > 0
+        n_total = length(data.jphi)
+        n_kept = count(j -> abs(j) ≥ thr, data.jphi)
+        n_dropped = n_total - n_kept
+        if n_kept == 0
+            max_abs = n_total == 0 ? 0.0 : maximum(abs, data.jphi)
+            throw(ArgumentError(
+                "jphi_threshold=$thr eV filters out all $n_total SALCs " *
+                "(max |J|=$max_abs eV); Hamiltonian would be empty"
+            ))
+        end
+        if n_dropped > 0
+            max_dropped = maximum(
+                abs(j) for j in data.jphi if abs(j) < thr; init = 0.0
+            )
+            @debug "Dropped $n_dropped / $n_total SALCs below " *
+                   "jphi_threshold=$thr eV (max dropped |J|=$max_dropped eV)"
+        end
+    end
     instances = _generate_instances(
-        data.salcs, data.jphi, data.system.map_sym, data.system.pos_frac, base_n, repeat
+        data.salcs, data.jphi, data.system.map_sym, data.system.pos_frac,
+        base_n, repeat; jphi_threshold = thr
     )
+    # cg_table is built from the unfiltered SALC list. Dropped SALCs produce
+    # no instances, so their (ls, Lf, Lseq) keys are never looked up at
+    # evaluation time — the extra entries are harmless and cheap.
     cg_table = build_cg_table(data.salcs)
     max_l = _max_l_in_instances(instances)
     atom_to_instance_indices = _build_atom_to_instance_indices(instances, n_super)

@@ -485,6 +485,7 @@ end
     include("simple/test_simple_external.jl")
     include("simple/test_simple_spin_proposal.jl")
     include("simple/test_simple_mc.jl")
+    include("simple/test_simple_jphi_threshold.jl")
     include("parity/test_parity_bcc.jl")
     include("parity/test_parity_fege.jl")
 
