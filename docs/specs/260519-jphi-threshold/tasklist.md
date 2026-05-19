@@ -22,21 +22,27 @@
 
 ## M2: Optimized 実装 + テスト
 
-- [ ] `src/JPhiMagestyCarlo.jl`: `load_sce_hamiltonian` に `jphi_threshold` kw、
-      `salc_list` / `jphi` の同期 filter (`threshold == 0.0` で短絡)。
-- [ ] キャッシュ Dict 型の更新: `_HAM_CACHE` / `_ECACHE_CACHE` /
+- [x] (2026-05-19) `src/JPhiMagestyCarlo.jl`: `load_sce_hamiltonian` に
+      `jphi_threshold` kw、`salc_list` / `jphi` の同期 filter
+      (`threshold == 0.0` で短絡)。
+- [x] (2026-05-19) キャッシュ Dict 型の更新: `_HAM_CACHE` / `_ECACHE_CACHE` /
       `_DERIVED_CACHE` のキーに `Float64` (threshold) を追加。
-- [ ] `_mpi_build_ham_and_cache` を `(xml_path, rep, thr)` シグネチャに変更。
-- [ ] `_get_or_build_derived` を `(xml_path, rep, thr, ...)` シグネチャに変更
-      (現状 `:tensor_template` パスのみ呼ぶが、両パスのキャッシュキーを揃える)。
-- [ ] `JPhiSpinMC` constructor 内の `get!(_HAM_CACHE, (xml, rep))` を
-      threshold 付きキーに更新 (`:tensor_template` パス)。
-- [ ] `register_evaluables` 内の `n_atoms` lookup を threshold 付きキーに更新。
-- [ ] `JPhiSpinMC` に `jphi_threshold::Float64` フィールド追加 +
+- [x] (2026-05-19) `_mpi_build_ham_and_cache` を `(xml_path, rep, thr)`
+      シグネチャに変更。
+- [x] (2026-05-19) `_get_or_build_derived` を `(xml_path, rep, thr, ...)`
+      シグネチャに変更 (現状 `:tensor_template` パスのみ呼ぶが、両パスの
+      キャッシュキーを揃える)。
+- [x] (2026-05-19) `JPhiSpinMC` constructor 内の
+      `get!(_HAM_CACHE, (xml, rep))` を threshold 付きキーに更新
+      (`:tensor_template` パス)。
+- [x] (2026-05-19) `register_evaluables` 内の `n_atoms` lookup を
+      threshold 付きキーに更新。
+- [x] (2026-05-19) `JPhiSpinMC` に `jphi_threshold::Float64` フィールド追加 +
       `Serialization.serialize` / `deserialize` に追加 (deserialize 側で
       `_mpi_build_ham_and_cache(xml, rep, thr)` を呼ぶ)。
-- [ ] serialize/deserialize 直上に「順序依存・同一バージョン内のみ」コメント。
-- [ ] `test/optimized/test_jphi_threshold.jl` (or 既存 test dir に追加)。
+- [x] (2026-05-19) serialize/deserialize 直上に「順序依存・同一バージョン
+      内のみ」コメント。
+- [x] (2026-05-19) `test/optimized/test_jphi_threshold.jl`。
 
 ## M3: Parity + slow テスト
 

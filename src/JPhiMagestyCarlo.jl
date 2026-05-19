@@ -122,8 +122,8 @@ end
 # separate OS process so this cache is not cross-rank shared memory — it only avoids
 # redundant work within the same process (e.g. register_evaluables calling
 # load_sce_hamiltonian after JPhiSpinMC is already constructed).
-const _HAM_CACHE    = Dict{Tuple{String,NTuple{3,Int}}, SCEHamiltonian}()
-const _ECACHE_CACHE = Dict{Tuple{String,NTuple{3,Int}}, LocalEnergyCache}()
+const _HAM_CACHE    = Dict{Tuple{String,NTuple{3,Int},Float64}, SCEHamiltonian}()
+const _ECACHE_CACHE = Dict{Tuple{String,NTuple{3,Int},Float64}, LocalEnergyCache}()
 
 # Caches the derived per-atom instance index structures, which are deterministically
 # computed from (ham, cache, active_body_indices) and can be expensive (~70 MiB) to
@@ -136,7 +136,7 @@ struct DerivedInstanceCache
     max_sites::Int
 end
 
-const _DERIVED_CACHE = Dict{Tuple{String,NTuple{3,Int},Tuple}, DerivedInstanceCache}()
+const _DERIVED_CACHE = Dict{Tuple{String,NTuple{3,Int},Float64,Tuple}, DerivedInstanceCache}()
 
 """
 Return `(4π)^(n_sites/2)` normalization used for cluster contributions.
@@ -190,11 +190,23 @@ function _build_supercell_geometry(
     return lattice_super, pos_super
 end
 
+"""
+    load_sce_hamiltonian(xml_path; repeat=(1,1,1), jphi_threshold=0.0) -> SCEHamiltonian
+
+`jphi_threshold` (eV, non-negative): SALCs whose `abs(jphi[s]) < jphi_threshold`
+are filtered out of `salc_list` / `jphi` before the Hamiltonian is built.
+Default `0.0` keeps every SALC (bit-exact match to the unfiltered path).
+Use `eps()` or `nextfloat(0.0)` to drop only strictly-zero coefficients.
+Throws `ArgumentError` if every SALC would be dropped.
+"""
 function load_sce_hamiltonian(
     xml_path::AbstractString;
     repeat::NTuple{3, Int} = (1, 1, 1),
+    jphi_threshold::Real = 0.0,
 )::SCEHamiltonian
     all(r -> r ≥ 1, repeat) || throw(ArgumentError("repeat must be positive integers, got $repeat"))
+    thr = Float64(jphi_threshold)
+    thr ≥ 0 || throw(ArgumentError("jphi_threshold must be non-negative, got $thr"))
     basis = read_salcbasis_from_xml(xml_path)
     sys = parse_system_xml(xml_path)
     jphi = read_jphi_coefficients(xml_path)
@@ -205,6 +217,30 @@ function load_sce_hamiltonian(
         init = 0,
     ) ||
         throw(ArgumentError("atom index in basis exceeds NumberOfAtoms"))
+
+    salc_list = basis.salc_list
+    if thr > 0
+        # `keep(s) = abs(jphi[s]) ≥ thr`. Short-circuit when thr == 0 so the
+        # unfiltered path stays bit-exact (no filter/log/check runs at all).
+        n_total = length(jphi)
+        keep_mask = abs.(jphi) .≥ thr
+        n_kept = count(keep_mask)
+        if n_kept == 0
+            max_abs = isempty(jphi) ? 0.0 : maximum(abs, jphi)
+            throw(ArgumentError(
+                "jphi_threshold=$thr eV filters out all $n_total SALCs " *
+                "(max |J|=$max_abs eV); Hamiltonian would be empty"))
+        end
+        n_dropped = n_total - n_kept
+        if n_dropped > 0
+            max_dropped = maximum(abs(j) for (j, k) in zip(jphi, keep_mask) if !k; init = 0.0)
+            @debug "Dropped $n_dropped / $n_total SALCs below jphi_threshold=$thr eV " *
+                   "(max dropped |J|=$max_dropped eV)"
+            salc_list = salc_list[keep_mask]
+            jphi = jphi[keep_mask]
+        end
+    end
+
     n0 = sys.n_atoms
     lat_s, pos_s = _build_supercell_geometry(sys.lattice, sys.pos_frac, n0, repeat)
     n_super = n0 * repeat[1] * repeat[2] * repeat[3]
@@ -214,7 +250,7 @@ function load_sce_hamiltonian(
         repeat,
         lat_s,
         pos_s,
-        basis.salc_list,
+        salc_list,
         jphi,
         sys.map_sym,
         sys.n_trans,
@@ -222,7 +258,7 @@ function load_sce_hamiltonian(
 end
 
 """
-    _mpi_build_ham_and_cache(xml_path, rep) -> (SCEHamiltonian, LocalEnergyCache)
+    _mpi_build_ham_and_cache(xml_path, rep, thr) -> (SCEHamiltonian, LocalEnergyCache)
 
 MPI-aware constructor: only MPI rank 0 (global) builds from XML; all other ranks
 receive the result via a single `MPI_Bcast` of the serialized bytes.
@@ -239,8 +275,9 @@ both the MPI coordination and the XML parse.
 function _mpi_build_ham_and_cache(
     xml_path::String,
     rep::NTuple{3, Int},
+    thr::Float64,
 )::Tuple{SCEHamiltonian, LocalEnergyCache}
-    key = (xml_path, rep)
+    key = (xml_path, rep, thr)
     if haskey(_HAM_CACHE, key) && haskey(_ECACHE_CACHE, key)
         return _HAM_CACHE[key], _ECACHE_CACHE[key]
     end
@@ -255,7 +292,7 @@ function _mpi_build_ham_and_cache(
     # (which doesn't build the full LocalEnergyCache), so reuse the ham
     # in that case and only build the missing cache.
     ham = get!(_HAM_CACHE, key) do
-        load_sce_hamiltonian(xml_path; repeat = rep)
+        load_sce_hamiltonian(xml_path; repeat = rep, jphi_threshold = thr)
     end
     cache = build_local_energy_cache(ham)
     _ECACHE_CACHE[key] = cache
@@ -273,11 +310,12 @@ This avoids rebuilding `_build_related_instances_by_atom` (O(n_instances × n_at
 function _get_or_build_derived(
     xml_path::String,
     rep::NTuple{3,Int},
+    thr::Float64,
     active_body_indices::Vector{Int},
     cache::LocalEnergyCache,
     n_atoms::Int,
 )::DerivedInstanceCache
-    key = (xml_path, rep, Tuple(active_body_indices))
+    key = (xml_path, rep, thr, Tuple(active_body_indices))
     haskey(_DERIVED_CACHE, key) && return _DERIVED_CACHE[key]
     derived = DerivedInstanceCache(
         active_body_indices,
@@ -693,6 +731,11 @@ Carlo.start(Carlo.SingleScheduler, job)
 |:----|:-----|:--------|:------------|
 | `:enabled_bodies` | collection of `Int` | (all) | Restrict the active cluster interactions to the listed body sizes (e.g., `[2]` for pair interactions only). Raises `ArgumentError` if a listed size is not present in the XML or if the selection is empty. |
 
+## SALC pruning
+| Key | Type | Default | Description |
+|:----|:-----|:--------|:------------|
+| `:jphi_threshold` | `Real ≥ 0` (eV) | `0.0` | Drop SALCs with `abs(J_s) < jphi_threshold`. Default `0.0` keeps every SALC (bit-exact match to the unfiltered Hamiltonian). Use `eps()` to drop only strictly-zero coefficients. Raises `ArgumentError` if all SALCs would be dropped. |
+
 ## Energy kernel
 | Key | Type | Default | Description |
 |:----|:-----|:--------|:------------|
@@ -759,6 +802,7 @@ mutable struct JPhiSpinMC{S<:SphericalHarmonics} <: AbstractMC
     # excluded from the serialized representation to avoid OOM on the root rank.
     xml_path::String
     repeat::NTuple{3,Int}
+    jphi_threshold::Float64
     enabled_bodies::Union{Nothing,Vector{Int}}
     # `:tensor_template` (default) uses base-cell cluster templates with on-the-fly
     # supercell index reconstruction (`_template_local_energy!`); SVector-specialized
@@ -797,6 +841,7 @@ end
 function JPhiSpinMC(params::AbstractDict)
     xml = params[:xml_path]
     rep = _parse_repeat_param(params)
+    thr = _parse_jphi_threshold_param(params)
     T = Float64(params[:T])
     enabled_bodies = if haskey(params, :enabled_bodies)
         Int.(collect(params[:enabled_bodies]))
@@ -829,8 +874,8 @@ function JPhiSpinMC(params::AbstractDict)
     if energy_kernel === :tensor_template
         # Skip the O(n_atoms × n_base) full cache build. Build only the ham and
         # derive max_l / max_sites / body_list directly from the SALC list.
-        ham = get!(_HAM_CACHE, (xml, rep)) do
-            load_sce_hamiltonian(xml; repeat = rep)
+        ham = get!(_HAM_CACHE, (xml, rep, thr)) do
+            load_sce_hamiltonian(xml; repeat = rep, jphi_threshold = thr)
         end
         max_l, max_sites, body_list = _salc_max_l_max_sites_bodies(ham, enabled_bodies)
         active_body_indices = collect(eachindex(body_list))
@@ -859,15 +904,15 @@ function JPhiSpinMC(params::AbstractDict)
             max_l, zlm_cache, zlm_row_buf, sph,
             other_sites_buf, cart_idx_buf,
             spin_theta_max, renorm_every, 0,
-            xml, rep, enabled_bodies, energy_kernel,
+            xml, rep, thr, enabled_bodies, energy_kernel,
             local_template, atoms_buf,
         )
     end
 
     # :tensor path: build the full LocalEnergyCache.
-    ham, cache = _mpi_build_ham_and_cache(xml, rep)
+    ham, cache = _mpi_build_ham_and_cache(xml, rep, thr)
     active_body_indices = _parse_enabled_body_indices(params, cache.body_list)
-    derived = _get_or_build_derived(xml, rep, active_body_indices, cache, ham.n_atoms)
+    derived = _get_or_build_derived(xml, rep, thr, active_body_indices, cache, ham.n_atoms)
     zlm_cache = _alloc_zlm_cache(ham.n_atoms, derived.max_l)
     zlm_row_buf = Vector{Float64}(undef, (derived.max_l + 1)^2)
     sph = SphericalHarmonics(derived.max_l)
@@ -893,6 +938,7 @@ function JPhiSpinMC(params::AbstractDict)
         0,
         xml,
         rep,
+        thr,
         enabled_bodies,
         energy_kernel,
         nothing,   # local_template: unused for :tensor
@@ -1074,6 +1120,14 @@ end
 """
 Parse `:repeat` / `:supercell` parameters, defaulting to `(1,1,1)`.
 """
+function _parse_jphi_threshold_param(params::AbstractDict)::Float64
+    thr = Float64(get(params, :jphi_threshold, 0.0))
+    thr ≥ 0 || throw(
+        ArgumentError("JPhiSpinMC: params[:jphi_threshold] must be non-negative, got $thr")
+    )
+    return thr
+end
+
 function _parse_repeat_param(params::AbstractDict)::NTuple{3, Int}
     if haskey(params, :repeat)
         r = params[:repeat]
@@ -1374,13 +1428,13 @@ end
 
 function Carlo.register_evaluables(::Type{<:JPhiSpinMC}, eval::AbstractEvaluator, params::AbstractDict)
     T = Float64(params[:T])
-    key = (params[:xml_path], _parse_repeat_param(params))
+    key = (params[:xml_path], _parse_repeat_param(params), _parse_jphi_threshold_param(params))
     # Use the process-local cache if available (populated by JPhiSpinMC constructor),
     # avoiding a redundant full XML parse + cluster enumeration on every rank.
     n = if haskey(_HAM_CACHE, key)
         _HAM_CACHE[key].n_atoms
     else
-        load_sce_hamiltonian(key[1]; repeat = key[2]).n_atoms
+        load_sce_hamiltonian(key[1]; repeat = key[2], jphi_threshold = key[3]).n_atoms
     end
     evaluate!(eval, :SpecificHeat, (:Energy2, :Energy)) do e2, e
         return n * (e2 - e^2) / T^2
@@ -1405,6 +1459,10 @@ end
 # keys (xml_path, repeat, enabled_bodies) are written; everything else is rebuilt
 # deterministically on deserialization.
 
+# Serialize layout is position-dependent: the deserialize half reads fields in
+# the exact order written here. Adding / removing / reordering a field requires
+# updating BOTH halves in the same commit. The format is valid only within a
+# single SpinClusterMC version — there is no on-disk version tag.
 function Serialization.serialize(s::Serialization.AbstractSerializer, mc::JPhiSpinMC)
     # `typeof(mc)` is a concrete `JPhiSpinMC{S}` (DataType) — `JPhiSpinMC` itself
     # is now a UnionAll due to the `{S<:SphericalHarmonics}` parameter, and
@@ -1416,6 +1474,7 @@ function Serialization.serialize(s::Serialization.AbstractSerializer, mc::JPhiSp
     Serialization.serialize(s, mc.energy)
     Serialization.serialize(s, mc.xml_path)
     Serialization.serialize(s, mc.repeat)
+    Serialization.serialize(s, mc.jphi_threshold)
     Serialization.serialize(s, mc.spin_theta_max)
     Serialization.serialize(s, mc.renorm_every)
     Serialization.serialize(s, mc.sweep_count)
@@ -1423,6 +1482,8 @@ function Serialization.serialize(s::Serialization.AbstractSerializer, mc::JPhiSp
     Serialization.serialize(s, mc.energy_kernel)
 end
 
+# See the serialize comment above: the order of `deserialize` calls must match
+# the writer exactly.
 function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{<:JPhiSpinMC})
     T            = Serialization.deserialize(s)::Float64
     spins_mat    = Serialization.deserialize(s)::Matrix{Float64}
@@ -1430,6 +1491,7 @@ function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{<
     energy       = Serialization.deserialize(s)::Float64
     xml_path     = Serialization.deserialize(s)::String
     repeat       = Serialization.deserialize(s)::NTuple{3,Int}
+    jphi_threshold = Serialization.deserialize(s)::Float64
     spin_theta_max = Serialization.deserialize(s)
     renorm_every = Serialization.deserialize(s)::Int
     sweep_count  = Serialization.deserialize(s)::Int
@@ -1439,10 +1501,10 @@ function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{<
     # Use the process-local cache (populated at startup via _mpi_build_ham_and_cache).
     # On rank 0, this is called 32 times during Carlo's PT checkpoint gather;
     # the cache ensures ham/local_cache are NOT rebuilt 32 times.
-    ham, cache = _mpi_build_ham_and_cache(xml_path, repeat)
+    ham, cache = _mpi_build_ham_and_cache(xml_path, repeat, jphi_threshold)
 
     active_body_indices = _enabled_bodies_to_active_indices(enabled_bodies, cache.body_list)
-    derived = _get_or_build_derived(xml_path, repeat, active_body_indices, cache, ham.n_atoms)
+    derived = _get_or_build_derived(xml_path, repeat, jphi_threshold, active_body_indices, cache, ham.n_atoms)
     zlm_cache = _alloc_zlm_cache(ham.n_atoms, derived.max_l)
     zlm_row_buf = Vector{Float64}(undef, (derived.max_l + 1)^2)
     sph = SphericalHarmonics(derived.max_l)
@@ -1459,7 +1521,7 @@ function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{<
         derived.max_l, zlm_cache, zlm_row_buf, sph,
         Vector{Int}(undef, derived.max_sites), Vector{Int}(undef, derived.max_sites),
         spin_theta_max, renorm_every, sweep_count,
-        xml_path, repeat, enabled_bodies,
+        xml_path, repeat, jphi_threshold, enabled_bodies,
         energy_kernel, local_template, atoms_buf,
     )
     _rebuild_zlm_cache!(mc)
