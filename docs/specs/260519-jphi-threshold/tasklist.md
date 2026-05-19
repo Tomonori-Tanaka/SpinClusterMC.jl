@@ -7,17 +7,18 @@
 
 ## M1: Simple 実装 + テスト
 
-- [ ] `src/simple/types.jl`: `SpinClusterHamiltonian` に `jphi_threshold` kw 追加、
-      `_generate_instances` で filter、log + empty チェック。
-      **`threshold == 0.0` のときは filter/log/check ブロック全体を短絡**
-      (bit-exact 保証)。`SpinClusterHamiltonian` の docstring に
+- [x] (2026-05-19) `src/simple/types.jl`: `SpinClusterHamiltonian` に
+      `jphi_threshold` kw 追加、`_generate_instances` で filter、log +
+      empty チェック。**`threshold == 0.0` のときは filter/log/check ブロック
+      全体を短絡** (bit-exact 保証)。`SpinClusterHamiltonian` の docstring に
       `jphi_threshold` 引数説明 + `J = 0.0` を厳密に drop したい場合の
       `eps()` 注記を追加。
-- [ ] `src/simple/mc.jl`: `SCEMC` 構築で `params[:jphi_threshold]` を読み、
-      `register_evaluables` でも同様に。SCEMC docstring の optional params
-      表に追記。
-- [ ] `test/simple/test_jphi_threshold.jl`: filter 挙動 / エラー / default 一致。
-- [ ] `make test` (Simple 部分) で pass。
+- [x] (2026-05-19) `src/simple/mc.jl`: `SCEMC` 構築で `params[:jphi_threshold]`
+      を読み、`register_evaluables` でも同様に。SCEMC docstring の optional
+      params 表に追記。
+- [x] (2026-05-19) `test/simple/test_simple_jphi_threshold.jl`:
+      filter 挙動 / エラー / default 一致 / 境界 keep / SCEMC plumb。
+- [x] (2026-05-19) `make test` 全体 pass (parity / JET 含む)。
 
 ## M2: Optimized 実装 + テスト
 
