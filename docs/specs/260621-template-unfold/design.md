@@ -34,7 +34,11 @@ prefactor は `js * eff_mult * scaling` (`eff_mult = multiplicity ÷ s_base`)。
 
 ### 2.2 関連テーブル: base 原子 → primitive 副格子
 
-`related{,2,3}_by_base_atom`(長さ base_n) → `related{,2,3}_by_subl`(長さ n_prim)。
+`LocalEnergyTemplate` の 3 フィールド
+`related_by_base_atom` / `related2_by_base_atom` / `related3_by_base_atom`
+(各 長さ base_n) を
+`related_by_subl` / `related2_by_subl` / `related3_by_subl`
+(各 長さ n_prim) に置き換える (N=2/3/≥4 でそれぞれ独立)。
 
 **重要 (pivot_k は参加サイトで可変)**: 原子 `i` の局所エネルギーには、`i` が
 **どのサイトとして参加するか**に関わらず `i` に触れる全クラスタが必要。よって
@@ -90,6 +94,25 @@ SAI テーブルを `_build_sai_table_n` で precompute。`LocalEnergyTemplate` 
 - `:tensor_template` も `:tensor` も un-fold M で動く → **両カーネルとも一般 M で
   選択可能** (Phase 1 の「M では :tensor 強制」「:tensor_template+M はエラー」を
   解除)。
+
+### 原子番号付けレイアウトの変更 (破壊的)
+
+`repeat` を M に変換すると、supercell 原子の列順が変わる:
+- folded 旧経路: **tile-major** `i = base_atom + base_n*(ti + n1*tj + n1*n2*tk)`
+  (`supercell_atom_index`)。
+- un-fold 新経路: **cell-major** `i = subl + n_prim*(cell_id-1)`
+  (`cell_index` / `_enumerate_cells`)。
+
+`mc.spins` の列順が `repeat>1` で変わるため、列順に依存する以下を更新する
+(open decision 2 の base-cell タイリング廃止と連動):
+- `src/simple/spin_proposal.jl` の `_tile_base_matrix`
+  (コメント "tile-major order" 前提) を撤去。
+- tile-major を前提にした既存テスト
+  (`test/bcc_2x2x2`: "initial_spins tiling" / "cross-tile",
+  `test/simple/test_simple_spin_proposal.jl`: Matrix tiling) を
+  un-fold cell-major 期待値に書き換えるか撤去 (§6 / tasklist P2-M5)。
+
+`repeat=(1,1,1)` は tile-major ≡ cell-major (cell 1 個) なので列順不変。
 
 ### folded コード撤去 (open decision 1 に従う)
 

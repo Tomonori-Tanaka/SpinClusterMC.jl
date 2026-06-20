@@ -37,7 +37,11 @@
 - [ ] folded コード撤去 (open decision 1 で確定した範囲):
       `supercell_atom_index`/`_foreach_translated_instance`/
       `coupled_cluster_energy`/folded geometry/Simple `_generate_instances`/
-      `_tile_coords`/`_foreach_base_instance`。
+      `_tile_coords`/`_foreach_base_instance`/`_tile_base_matrix`。
+- [ ] `sce_energy` の `repeat`/`coupled_cluster_energy` 分岐を撤去し、M 変換後は
+      常に `_build_cluster_instances(h)` (instance 総和) パスのみにする。
+- [ ] 原子番号付けが tile-major → cell-major に変わる (破壊的)。`mc.spins` の
+      列順に依存するテスト・docstring・serialize を要確認 (design §3)。
 - [ ] `repeat` == `supercell_matrix` 等価を確認。`repeat=(1,1,1)` 不変。
 
 ## P2-M4: init_spins / cache / MPI
@@ -54,6 +58,9 @@
 > 依存: P2-M2〜M4。
 
 - [ ] 既存 repeat>1 テスト (bcc (2,2,2) 等) を un-fold 期待値に更新。
+- [ ] tile-major 前提テストを cell-major に書き換えるか撤去
+      (`test/bcc_2x2x2`: "initial_spins tiling" / "cross-tile",
+      `test/simple/test_simple_spin_proposal.jl`: Matrix tiling)。
 - [ ] `supercell_atom_index`/folded 関数の直接テストを撤去。
 - [ ] parity に `:tensor_template`×M を追加。"intended divergence" テスト撤去。
 - [ ] `make test` / `make test-slow` 全 pass、JET pass。
@@ -63,4 +70,6 @@
 - [ ] `repeat` が un-fold 糖衣・folded 廃止を docstring/terminology/README に反映。
       `design_notes.md` の Phase 2 future-work を「完了」に。
 - [ ] `JuliaFormatter` (src/simple, 共有, test/simple, test/parity)。
+      `template_energy.jl`/`JPhiMagestyCarlo.jl` は既存スタイル維持で整形対象外
+      (CLAUDE.md)。
 - [ ] `code-reviewer` / `numerical-reviewer`。

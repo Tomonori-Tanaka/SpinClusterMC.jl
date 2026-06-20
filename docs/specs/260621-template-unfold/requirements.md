@@ -19,8 +19,8 @@ Phase 1 で `supercell_matrix`(一般 M, un-fold) を **`:tensor` カーネル�
 
 物理規約: クラスタは相対ベクトルで定義される幾何的対象。un-fold が正
 (face ペアを ±Δ の別原子に展開)。Magesty 規約の folded は基本セルの索引ペアを
-畳んだまま複製する有限サイズ近似であり、**正当性を優先して廃止する**
-(`feedback_correctness_over_compat`)。
+畳んだまま複製する有限サイズ近似であり、幾何的な正当性を後方互換より優先して
+**廃止する** (2026-06-21 user 確定、open decision 1)。
 
 ## スコープ
 
