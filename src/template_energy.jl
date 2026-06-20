@@ -484,3 +484,164 @@ end
 # _template_local_energy! is defined in JPhiMagestyCarlo.jl after JPhiSpinMC,
 # so that mc::JPhiSpinMC can be used as the type annotation to avoid boxing of
 # Union{Nothing,LocalEnergyTemplate} fields in the hot sweep! path.
+
+# =============================================================================
+# Phase 2: primitive cell-major template construction (general supercell M)
+#
+# The folded `BaseClusterInstance{,2,3}` above store base-cell atom indices plus
+# tile offsets and reconstruct supercell indices with `supercell_atom_index`
+# (tile-major numbering). The Phase-2 un-fold path instead describes each cluster
+# in *primitive-cell* coordinates (sublattice + pivot-relative cell offset) and
+# places it onto an arbitrary integer supercell matrix M via `SupercellCommon`,
+# matching the `:tensor` un-fold reference (`_build_cluster_instances_matrix`).
+#
+# This block (P2-M1) builds the templates and a cell-major SAI table but is NOT
+# yet wired into `_template_local_energy!` (sweep still uses the folded path).
+# Its geometry is validated against `_build_cluster_instances_matrix` by a unit
+# test. Kernel wiring (N=2/3 fast paths) follows in P2-M2.
+# =============================================================================
+
+# One primitive-cell-based cluster template (one per (salc, cbc), un-fold path).
+# `site_delta[k]` is the pivot-relative (site 1) integer primitive-cell offset of
+# site k (`site_delta[1] == (0,0,0)`); `site_subl[k]` its primitive sublattice.
+# `prefactor = js * eff_mult * scaling` with `eff_mult = multiplicity ÷ s_base`,
+# un-folding the XML self-overlap (matches `_build_cluster_instances_matrix`).
+struct PrimClusterTemplate
+    cbc_id::UInt                       # objectid(cbc), for grouping / validation
+    pivot_subl::Int                    # site_subl[1]
+    site_subl::Vector{Int}             # primitive sublattice of each site
+    site_delta::Vector{NTuple{3,Int}}  # pivot-relative primitive-cell offsets
+    ls::Vector{Int}
+    prefactor::Float64
+    dims::Vector{Int}                  # 2*ls[k]+1
+    strides::Vector{Int}               # length N+1
+    coeff_flat::Vector{Float64}
+    cbc_coefficient::Vector{Float64}   # Mf-dimension coefficients (length Mf_size)
+end
+
+"""
+    _build_prim_cluster_templates(h::SCEHamiltonian)
+        -> (templates::Vector{PrimClusterTemplate},
+            related_by_subl::Vector{Vector{RelatedBaseCluster}})
+
+Build one `PrimClusterTemplate` per coupled basis of the general supercell-matrix
+Hamiltonian `h` (requires `h.prim`/`h.supercell_matrix`). `related_by_subl[subl]`
+lists `(template_idx, k)` for every site `k` of every template with
+`site_subl[k] == subl`, so a supercell atom on sublattice `subl` finds all
+clusters that touch it (at any participating site).
+
+The geometry mirrors `_build_cluster_instances_matrix`: `_cluster_offsets` for
+the pivot-relative sublattice offsets and `eff_mult = multiplicity ÷ s_base` for
+the un-folded prefactor. Placement onto `M` is done by the SAI table builder.
+"""
+function _build_prim_cluster_templates(h::SCEHamiltonian)
+    prim = h.prim::PrimitiveCell
+    n_prim = prim.n_prim
+    map_sym = h.map_sym
+    n_trans = h.n_trans
+
+    templates = PrimClusterTemplate[]
+    related_by_subl = [RelatedBaseCluster[] for _ in 1:n_prim]
+    coeff_flat_cache = Dict{UInt, Vector{Float64}}()
+
+    for (s, group) in enumerate(h.salc_list)
+        js = h.jphi[s]
+        for cbc in group
+            N = length(cbc.atoms)
+            scaling = _cluster_scaling(N)
+            inst_dims = [2 * l + 1 for l in cbc.ls]
+            inst_strides = _compute_instance_strides(cbc.ls)
+            inst_coeff_flat = get!(coeff_flat_cache, objectid(cbc)) do
+                vec(collect(Float64, cbc.coeff_tensor))
+            end
+            s_base = _cluster_base_stabilizer(cbc.atoms, map_sym, n_trans)
+            mod(cbc.multiplicity, s_base) == 0 || throw(ErrorException(
+                "multiplicity $(cbc.multiplicity) not divisible by base stabilizer " *
+                "$s_base for cluster $(collect(cbc.atoms)); cannot un-fold " *
+                "self-overlap for general supercell tiling"))
+            eff_mult = cbc.multiplicity ÷ s_base
+            pivot_subl, site_subl, site_delta = _cluster_offsets(cbc.atoms, prim)
+
+            push!(templates, PrimClusterTemplate(
+                objectid(cbc),
+                pivot_subl,
+                site_subl,
+                site_delta,
+                collect(Int, cbc.ls),
+                js * eff_mult * scaling,
+                inst_dims,
+                inst_strides,
+                inst_coeff_flat,
+                collect(Float64, cbc.coefficient),
+            ))
+            t_idx = length(templates)
+            for k in 1:N
+                push!(related_by_subl[site_subl[k]], RelatedBaseCluster(t_idx, k))
+            end
+        end
+    end
+    return templates, related_by_subl
+end
+
+"""
+    _build_sai_table_cellmajor(templates, related_by_subl, h)
+        -> (sai_flat::Vector{Int}, sai_offsets::Vector{Int})
+
+Precompute supercell-atom indices (SAIs) for every supercell atom, cell-major.
+Supercell atom `i` decomposes as `(cell_id, subl) = ((i-1) ÷ n_prim + 1,
+(i-1) % n_prim + 1)`. For each `rc = (template_idx, pivot_k)` in
+`related_by_subl[subl]`, the participating site `pivot_k` is placed in `cell_id`
+and every site `k'` is wrapped into the supercell:
+
+    abs_off = cells_by_id[cell_id] .+ (site_delta[k'] - site_delta[pivot_k])
+    sai_k'  = site_subl[k'] + n_prim * (cell_index[wrap(abs_off)] - 1)
+
+so `sai_{pivot_k} == i`. SAIs for atom `i` are concatenated over `rc` (each `rc`
+contributing `N(rc)` entries) in the `related_by_subl[subl]` order, into the
+slice `sai_flat[sai_offsets[i] : sai_offsets[i+1]-1]`.
+"""
+function _build_sai_table_cellmajor(
+    templates::Vector{PrimClusterTemplate},
+    related_by_subl::Vector{Vector{RelatedBaseCluster}},
+    h::SCEHamiltonian,
+)::Tuple{Vector{Int}, Vector{Int}}
+    prim = h.prim::PrimitiveCell
+    n_prim = prim.n_prim
+    M = SMatrix{3, 3, Int}(h.supercell_matrix)
+    detM = _int_det3(M)
+    adjM = _adjugate3(M)
+    cell_index, cells_by_id = _enumerate_cells(M, adjM, detM)
+    n_atoms = h.n_atoms
+
+    offsets = Vector{Int}(undef, n_atoms + 1)
+    offsets[1] = 1
+    for i in 1:n_atoms
+        subl = ((i - 1) % n_prim) + 1
+        tot = 0
+        for rc in related_by_subl[subl]
+            tot += length(templates[rc.inst_idx].site_subl)
+        end
+        offsets[i + 1] = offsets[i] + tot
+    end
+
+    flat = Vector{Int}(undef, offsets[n_atoms + 1] - 1)
+    for i in 1:n_atoms
+        cell_id = ((i - 1) ÷ n_prim) + 1
+        subl = ((i - 1) % n_prim) + 1
+        c0 = cells_by_id[cell_id]
+        pos = offsets[i] - 1
+        for rc in related_by_subl[subl]
+            t = templates[rc.inst_idx]
+            pv = t.site_delta[rc.pivot_k]
+            N = length(t.site_subl)
+            for k in 1:N
+                d = t.site_delta[k]
+                abs_off = (c0[1] + d[1] - pv[1], c0[2] + d[2] - pv[2], c0[3] + d[3] - pv[3])
+                w = _wrap_offset_into_supercell(abs_off, M, adjM, detM)
+                pos += 1
+                flat[pos] = t.site_subl[k] + n_prim * (cell_index[w] - 1)
+            end
+        end
+    end
+    return flat, offsets
+end

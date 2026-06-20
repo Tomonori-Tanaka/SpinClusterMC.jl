@@ -8,6 +8,7 @@ using LinearAlgebra: norm
 const OPT = SpinClusterMC.JPhiMagestyCarlo
 
 const BCC = joinpath(@__DIR__, "..", "bcc_2x2x2", "jphi.xml")
+const FEGE = joinpath(@__DIR__, "..", "fege_2x2x2", "jphi.xml")
 
 _ferro(n) = repeat(Float64[0, 0, 1], 1, n)
 
@@ -65,6 +66,50 @@ end
     mcbad = OPT.JPhiSpinMC(pbad)
     ctxbad = Carlo.MCContext{MersenneTwister}(pbad)
     @test_throws ArgumentError Carlo.init!(mcbad, ctxbad, pbad)
+end
+
+@testset "primitive cell-major template SAI matches matrix instances" begin
+    # P2-M1: the un-fold template construction (_build_prim_cluster_templates +
+    # _build_sai_table_cellmajor) must reconstruct exactly the same set of
+    # supercell cluster instances as the :tensor un-fold reference
+    # (_build_cluster_instances_matrix), for several general supercell matrices.
+    # (xml, M) pairs: BCC (n_prim=1) and FeGe (n_prim=8, multi-sublattice).
+    cases = [
+        (BCC, [2 1 0; 0 2 0; 0 0 2]),
+        (BCC, [2 0 0; 0 2 0; 0 0 2]),
+        (BCC, [3 1 0; 0 1 0; 0 0 2]),
+        (FEGE, [1 0 0; 0 1 0; 0 0 2]),
+        (FEGE, [1 1 0; 0 2 0; 0 0 1]),
+    ]
+    for (xml, M) in cases
+        h = OPT.load_sce_hamiltonian(xml; supercell_matrix = M)
+        templates, related = OPT._build_prim_cluster_templates(h)
+        flat, offsets = OPT._build_sai_table_cellmajor(templates, related, h)
+        n_prim = h.prim.n_prim
+
+        # Reconstruct (cbc id, sorted atoms) from the cell-major SAI table.
+        tmpl_set = Set{Tuple{UInt, Vector{Int}}}()
+        for i in 1:h.n_atoms
+            subl = ((i - 1) % n_prim) + 1
+            pos = offsets[i] - 1
+            for rc in related[subl]
+                t = templates[rc.inst_idx]
+                N = length(t.site_subl)
+                atoms = Int[flat[pos + k] for k in 1:N]
+                pos += N
+                @test atoms[rc.pivot_k] == i          # pivot site lands on atom i
+                push!(tmpl_set, (t.cbc_id, sort(atoms)))
+            end
+        end
+
+        # Reference set from the matrix un-fold instance list.
+        ref_set = Set{Tuple{UInt, Vector{Int}}}()
+        for inst in OPT._build_cluster_instances_matrix(h)
+            push!(ref_set, (objectid(inst.cbc), sort(inst.atoms)))
+        end
+
+        @test tmpl_set == ref_set
+    end
 end
 
 @testset "JPhiSpinMC supercell_matrix serialize round-trip" begin
