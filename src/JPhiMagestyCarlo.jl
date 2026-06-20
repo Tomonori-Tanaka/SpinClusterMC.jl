@@ -64,8 +64,9 @@ struct SCEHamiltonian
     jphi::Vector{Float64}
     map_sym::Matrix{Int}
     n_trans::Int
-    # General supercell-matrix path (Phase 1, `:tensor` kernel only).
-    # `nothing`: legacy diagonal-`repeat` path (`repeat` holds the actual
+    # General supercell-matrix path (un-fold; both `:tensor` and
+    # `:tensor_template` kernels). `nothing`: legacy diagonal-`repeat` path
+    # (`repeat` holds the actual
     # `(n1, n2, n3)` tiling, `prim === nothing`). `Matrix{Int}`: general
     # supercell-matrix path — `repeat` is the `(0, 0, 0)` sentinel and `prim`
     # carries the recovered primitive cell used to tile clusters onto it.
@@ -251,8 +252,8 @@ Supercell selection (mutually exclusive):
   and self-overlapping ("face") pairs are un-folded into their distinct ±Δ
   neighbors. For a ferromagnet / ground state the per-atom energy equals the
   base-cell model; for n > 1 non-collinear configs it differs from (and is more
-  geometrically faithful than) the folded diagonal `repeat` path. This path is
-  served by the `:tensor` kernel only (see `JPhiSpinMC`).
+  geometrically faithful than) the folded diagonal `repeat` path. Both the
+  `:tensor` and `:tensor_template` kernels serve this path (see `JPhiSpinMC`).
 
 `jphi_threshold` (eV, non-negative): SALCs whose `abs(jphi[s]) < jphi_threshold`
 are filtered out of `salc_list` / `jphi` before the Hamiltonian is built.
@@ -324,7 +325,7 @@ function load_sce_hamiltonian(
             nothing,
         )
     end
-    # ---- General supercell-matrix path (primitive cell-major, :tensor only) ----
+    # ---- General supercell-matrix path (primitive cell-major, un-fold) ----
     repeat == (1, 1, 1) ||
         throw(ArgumentError("specify either repeat or supercell_matrix, not both"))
     size(supercell_matrix) == (3, 3) ||
@@ -910,7 +911,7 @@ Carlo.start(Carlo.SingleScheduler, job)
 | Key | Type | Default | Description |
 |:----|:-----|:--------|:------------|
 | `:repeat` or `:supercell` | 3-vector of `Int` | `(1,1,1)` | Diagonal tiling of the base (XML) cell. Total atom count becomes `base_n_atoms × n₁ × n₂ × n₃`. |
-| `:supercell_matrix` | `Matrix{Int}` (3×3) | — | General integer supercell of the primitive cell (non-diagonal / non-base-multiple). Mutually exclusive with `:repeat`/`:supercell`. Forces `:energy_kernel = :tensor` (the `:tensor_template` fast path is diagonal-only; combining it with `:supercell_matrix` errors). `:initial_spins` base-cell tiling is unavailable on this path (use random init). |
+| `:supercell_matrix` | `Matrix{Int}` (3×3) | — | General integer supercell of the primitive cell (non-diagonal / non-base-multiple). Mutually exclusive with `:repeat`/`:supercell`. Both kernels support it via the shared un-fold geometry: `:tensor_template` (default) and `:tensor` give the same energy. Atoms use primitive cell-major numbering, so `:initial_spins` base-cell tiling is unavailable on this path (use random init). |
 
 ## Initial spin configuration
 | Key | Type | Default | Description |
@@ -1004,7 +1005,7 @@ mutable struct JPhiSpinMC{S<:SphericalHarmonics} <: AbstractMC
     xml_path::String
     repeat::NTuple{3,Int}
     # `nothing` for the diagonal `repeat` path; the general supercell matrix
-    # (primitive-cell units, `:tensor` kernel only) otherwise.
+    # (primitive-cell units, un-fold; both kernels) otherwise.
     supercell_matrix::Union{Nothing,Matrix{Int}}
     jphi_threshold::Float64
     enabled_bodies::Union{Nothing,Vector{Int}}
@@ -1178,7 +1179,8 @@ include("spin_utils.jl")
         @inbounds for ent in unfold.entry_off[i]:(unfold.entry_off[i + 1] - 1)
             t = templates[unfold.entry_tmpl[ent]]
             lo = unfold.sai_off[ent]
-            atoms = view(sai, lo:(unfold.sai_off[ent + 1] - 1))
+            hi = unfold.sai_off[ent + 1] - 1
+            atoms = view(sai, lo:hi)
             e += t.prefactor * _tensor_contract_unfold_changed!(
                 mc.contract_other_sites,
                 mc.contract_cart_idx,

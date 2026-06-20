@@ -564,10 +564,12 @@ end
 # places it onto an arbitrary integer supercell matrix M via `SupercellCommon`,
 # matching the `:tensor` un-fold reference (`_build_cluster_instances_matrix`).
 #
-# This block (P2-M1) builds the templates and a cell-major SAI table but is NOT
-# yet wired into `_template_local_energy!` (sweep still uses the folded path).
-# Its geometry is validated against `_build_cluster_instances_matrix` by a unit
-# test. Kernel wiring (N=2/3 fast paths) follows in P2-M2.
+# This block builds the templates and a cell-major SAI table; the un-fold branch
+# of `_template_local_energy!` contracts them via `_tensor_contract_unfold_changed!`
+# (P2-M2). The geometry is validated against `_build_cluster_instances_matrix` by
+# a unit test, and the kernel against the `:tensor` path by a trajectory test. The
+# N=2/3 SVector-specialized fast paths of the folded kernel are not yet mirrored
+# here (a single generic contraction is used); that is a deferred perf refinement.
 # =============================================================================
 
 """
