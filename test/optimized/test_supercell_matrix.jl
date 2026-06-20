@@ -38,7 +38,7 @@ end
         :supercell_matrix => [2 1 0; 0 2 0; 0 0 2],
         :sweeps => 10, :thermalization => 0, :binsize => 1, :seed => 1)
     mc = OPT.JPhiSpinMC(p)
-    @test mc.energy_kernel === :tensor         # forced for the matrix path
+    @test mc.energy_kernel === :tensor_template   # Phase 2: default, un-fold M
     @test mc.supercell_matrix == [2 1 0; 0 2 0; 0 0 2]
     @test mc.ham.n_atoms == 8
 
@@ -51,11 +51,22 @@ end
     end
     @test isapprox(mc.energy, OPT.sce_energy(mc.ham, mc.spins); atol = 1.0e-6, rtol = 1.0e-6)
 
-    # :tensor_template is not supported with supercell_matrix (Phase 1).
-    @test_throws ArgumentError OPT.JPhiSpinMC(Dict{Symbol, Any}(
+    # Phase 2: :tensor_template now supports supercell_matrix (un-fold). It must
+    # build, run, and stay energy-consistent like the :tensor kernel.
+    mctpl = OPT.JPhiSpinMC(Dict{Symbol, Any}(
         :xml_path => BCC, :T => 0.05,
-        :supercell_matrix => [1 0 0; 0 1 0; 0 0 1],
+        :supercell_matrix => [2 1 0; 0 2 0; 0 0 2],
+        :sweeps => 10, :thermalization => 0, :binsize => 1, :seed => 1,
         :energy_kernel => :tensor_template))
+    @test mctpl.energy_kernel === :tensor_template
+    ctxtpl = Carlo.MCContext{MersenneTwister}(p)
+    Carlo.init!(mctpl, ctxtpl, p)
+    @test isapprox(mctpl.energy, OPT.sce_energy(mctpl.ham, mctpl.spins); atol = 1.0e-8)
+    for _ in 1:10
+        Carlo.sweep!(mctpl, ctxtpl)
+    end
+    @test isapprox(
+        mctpl.energy, OPT.sce_energy(mctpl.ham, mctpl.spins); atol = 1.0e-6, rtol = 1.0e-6)
 
     # Base-cell tiling of initial_spins is rejected on the matrix path.
     pbad = Dict{Symbol, Any}(
@@ -84,51 +95,100 @@ end
     for (xml, M) in cases
         h = OPT.load_sce_hamiltonian(xml; supercell_matrix = M)
         templates, related = OPT._build_prim_cluster_templates(h)
-        flat, offsets = OPT._build_sai_table_cellmajor(templates, related, h)
-        n_prim = h.prim.n_prim
+        tab = OPT._build_sai_table_cellmajor(templates, related, h)
 
-        # Reconstruct (cbc id, sorted atoms) from the cell-major SAI table.
-        tmpl_set = Set{Tuple{UInt, Vector{Int}}}()
+        # Reconstruct from the per-atom de-duplicated table, grouping by
+        # (cbc id, sorted atoms) and summing per-entry prefactors. The grouped
+        # prefactors must equal those of the matrix un-fold instances touching i
+        # (fold-accumulation preserved, self-overlap repeats collapsed).
+        instances = OPT._build_cluster_instances_matrix(h)
         for i in 1:h.n_atoms
-            subl = ((i - 1) % n_prim) + 1
-            pos = offsets[i] - 1
-            for rc in related[subl]
-                t = templates[rc.inst_idx]
-                N = length(t.site_subl)
-                atoms = Int[flat[pos + k] for k in 1:N]
-                pos += N
-                @test atoms[rc.pivot_k] == i          # pivot site lands on atom i
-                push!(tmpl_set, (t.cbc_id, sort(atoms)))
+            tg = Dict{Tuple{UInt, Vector{Int}}, Float64}()
+            for ent in tab.entry_off[i]:(tab.entry_off[i + 1] - 1)
+                t = templates[tab.entry_tmpl[ent]]
+                atoms = tab.sai[tab.sai_off[ent]:(tab.sai_off[ent + 1] - 1)]
+                @test i in atoms                       # touched-atom invariant
+                key = (t.cbc_id, sort(atoms))
+                tg[key] = get(tg, key, 0.0) + t.prefactor
+            end
+            rg = Dict{Tuple{UInt, Vector{Int}}, Float64}()
+            for inst in instances
+                i in inst.atoms || continue
+                key = (objectid(inst.cbc), sort(inst.atoms))
+                rg[key] = get(rg, key, 0.0) + inst.prefactor
+            end
+            @test keys(tg) == keys(rg)
+            for key in keys(tg)
+                @test isapprox(tg[key], rg[key]; rtol = 1.0e-12)
             end
         end
+    end
+end
 
-        # Reference set from the matrix un-fold instance list.
-        ref_set = Set{Tuple{UInt, Vector{Int}}}()
-        for inst in OPT._build_cluster_instances_matrix(h)
-            push!(ref_set, (objectid(inst.cbc), sort(inst.atoms)))
+@testset "tensor_template ≡ tensor under general supercell_matrix" begin
+    # P2-M2: the un-fold :tensor_template kernel must reproduce the :tensor kernel
+    # bit-for-bit. With identical seed and proposal stream, exact ΔE agreement
+    # makes the whole Metropolis trajectory identical (final energy and spins).
+    cases = [
+        (BCC, [2 1 0; 0 2 0; 0 0 2]),
+        (BCC, [1 0 0; 0 1 0; 0 0 1]),      # single primitive cell (extreme self-overlap)
+        (BCC, [3 1 0; 0 1 0; 0 0 2]),
+        (FEGE, [1 0 0; 0 1 0; 0 0 2]),
+        (FEGE, [1 1 0; 0 2 0; 0 0 1]),
+    ]
+    for (xml, M) in cases
+        res = Dict{Symbol, Any}()
+        for kern in (:tensor, :tensor_template)
+            p = Dict{Symbol, Any}(
+                :xml_path => xml, :T => 0.08, :supercell_matrix => M,
+                :thermalization => 0, :binsize => 1, :seed => 42,
+                :energy_kernel => kern)
+            mc = OPT.JPhiSpinMC(p)
+            @test mc.energy_kernel === kern
+            ctx = Carlo.MCContext{MersenneTwister}(p)
+            Carlo.init!(mc, ctx, p)
+            # Init energy matches the un-fold reference for both kernels.
+            @test isapprox(mc.energy, OPT.sce_energy(mc.ham, mc.spins); atol = 1.0e-8)
+            for _ in 1:50
+                Carlo.sweep!(mc, ctx)
+            end
+            res[kern] = (mc.energy, copy(mc.spins))
         end
-
-        @test tmpl_set == ref_set
+        Et, St = res[:tensor]
+        Etp, Stp = res[:tensor_template]
+        @test isapprox(Et, Etp; atol = 1.0e-9, rtol = 1.0e-9)
+        @test maximum(norm(St[i] - Stp[i]) for i in eachindex(St)) < 1.0e-10
     end
 end
 
 @testset "JPhiSpinMC supercell_matrix serialize round-trip" begin
-    p = Dict{Symbol, Any}(
-        :xml_path => BCC, :T => 0.05,
-        :supercell_matrix => [2 1 0; 0 2 0; 0 0 2],
-        :sweeps => 5, :thermalization => 0, :binsize => 1, :seed => 3)
-    mc = OPT.JPhiSpinMC(p)
-    ctx = Carlo.MCContext{MersenneTwister}(p)
-    Carlo.init!(mc, ctx, p)
-    io = IOBuffer()
-    Serialization.serialize(io, mc)
-    seekstart(io)
-    mc2 = Serialization.deserialize(io)
-    @test mc2.supercell_matrix == mc.supercell_matrix
-    @test mc2.ham.n_atoms == mc.ham.n_atoms
-    @test mc2.energy_kernel === :tensor
-    @test isapprox(mc2.energy, mc.energy; atol = 1.0e-10)
-    @test isapprox(
-        OPT.sce_energy(mc2.ham, mc2.spins), OPT.sce_energy(mc.ham, mc.spins);
-        atol = 1.0e-10)
+    # Round-trip both kernels on the un-fold matrix path (deserialize rebuilds
+    # the un-fold template for :tensor_template via build_local_energy_template).
+    for kern in (:tensor, :tensor_template)
+        p = Dict{Symbol, Any}(
+            :xml_path => BCC, :T => 0.05,
+            :supercell_matrix => [2 1 0; 0 2 0; 0 0 2],
+            :sweeps => 5, :thermalization => 0, :binsize => 1, :seed => 3,
+            :energy_kernel => kern)
+        mc = OPT.JPhiSpinMC(p)
+        ctx = Carlo.MCContext{MersenneTwister}(p)
+        Carlo.init!(mc, ctx, p)
+        io = IOBuffer()
+        Serialization.serialize(io, mc)
+        seekstart(io)
+        mc2 = Serialization.deserialize(io)
+        @test mc2.supercell_matrix == mc.supercell_matrix
+        @test mc2.ham.n_atoms == mc.ham.n_atoms
+        @test mc2.energy_kernel === kern
+        @test isapprox(mc2.energy, mc.energy; atol = 1.0e-10)
+        @test isapprox(
+            OPT.sce_energy(mc2.ham, mc2.spins), OPT.sce_energy(mc.ham, mc.spins);
+            atol = 1.0e-10)
+        # After deserialization, sweeps continue to stay energy-consistent.
+        for _ in 1:5
+            Carlo.sweep!(mc2, ctx)
+        end
+        @test isapprox(
+            mc2.energy, OPT.sce_energy(mc2.ham, mc2.spins); atol = 1.0e-6, rtol = 1.0e-6)
+    end
 end

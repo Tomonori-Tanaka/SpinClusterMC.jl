@@ -1064,14 +1064,8 @@ function JPhiSpinMC(params::AbstractDict)
     if scm !== nothing
         rep == (1, 1, 1) || throw(ArgumentError(
             "specify either repeat/supercell or supercell_matrix, not both"))
-        # Phase 1: the general supercell matrix is served by the :tensor kernel
-        # only (the :tensor_template fast path stays diagonal-only).
-        (haskey(params, :energy_kernel) && Symbol(params[:energy_kernel]) === :tensor_template) &&
-            throw(ArgumentError(
-                "energy_kernel=:tensor_template is not supported with " *
-                "supercell_matrix (Phase 1); use energy_kernel=:tensor (forced " *
-                "automatically) or the diagonal repeat path"))
-        energy_kernel = :tensor
+        # Phase 2: both :tensor and :tensor_template support the general
+        # supercell matrix via the shared un-fold geometry (SupercellCommon).
     end
     spin_theta_max = if haskey(params, :spin_theta_max)
         θ = Float64(params[:spin_theta_max])
@@ -1091,8 +1085,10 @@ function JPhiSpinMC(params::AbstractDict)
     if energy_kernel === :tensor_template
         # Skip the O(n_atoms × n_base) full cache build. Build only the ham and
         # derive max_l / max_sites / body_list directly from the SALC list.
-        ham = get!(_HAM_CACHE, (xml, rep, nothing, thr)) do
-            load_sce_hamiltonian(xml; repeat = rep, jphi_threshold = thr)
+        ham = get!(_HAM_CACHE, (xml, rep, _scm_key(scm), thr)) do
+            scm === nothing ?
+                load_sce_hamiltonian(xml; repeat = rep, jphi_threshold = thr) :
+                load_sce_hamiltonian(xml; supercell_matrix = scm, jphi_threshold = thr)
         end
         max_l, max_sites, body_list = _salc_max_l_max_sites_bodies(ham, enabled_bodies)
         active_body_indices = collect(eachindex(body_list))
@@ -1121,7 +1117,7 @@ function JPhiSpinMC(params::AbstractDict)
             max_l, zlm_cache, zlm_row_buf, sph,
             other_sites_buf, cart_idx_buf,
             spin_theta_max, renorm_every, 0,
-            xml, rep, nothing, thr, enabled_bodies, energy_kernel,
+            xml, rep, scm, thr, enabled_bodies, energy_kernel,
             local_template, atoms_buf,
         )
     end
@@ -1170,6 +1166,31 @@ include("spin_utils.jl")
 # preventing boxing of Union{Nothing,LocalEnergyTemplate} in the hot sweep! path.
 @inline function _template_local_energy!(mc::JPhiSpinMC, i::Int)::Float64
     tpl = mc.local_template::LocalEnergyTemplate
+
+    # Phase-2 un-fold path (general supercell matrix): cell-major de-duplicated
+    # instance table. Each entry is the full contraction of a distinct cluster
+    # instance touching atom `i`.
+    unfold = tpl.unfold
+    if unfold !== nothing
+        templates = tpl.prim_templates
+        sai = unfold.sai
+        e = 0.0
+        @inbounds for ent in unfold.entry_off[i]:(unfold.entry_off[i + 1] - 1)
+            t = templates[unfold.entry_tmpl[ent]]
+            lo = unfold.sai_off[ent]
+            atoms = view(sai, lo:(unfold.sai_off[ent + 1] - 1))
+            e += t.prefactor * _tensor_contract_unfold_changed!(
+                mc.contract_other_sites,
+                mc.contract_cart_idx,
+                t,
+                atoms,
+                mc.zlm_cache,
+                i,
+            )
+        end
+        return e
+    end
+
     rep = mc.ham.repeat
     base_n = mc.ham.base_n_atoms
     b = ((i - 1) % base_n) + 1
