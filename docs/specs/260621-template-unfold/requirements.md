@@ -65,8 +65,14 @@ Phase 1 で `supercell_matrix`(一般 M, un-fold) を **`:tensor` カーネル�
   実テッサー `Zlm`、`Φᵥ`、`E = Σ contract·multiplicity·(4π)^(N/2)`。
 - **`:tensor_template` と `:tensor` は同一エネルギーを出す** (2 パス整合性、
   CLAUDE.md 連動箇所)。一般 M でも一致。
-- **`repeat=(1,1,1)` の結果は不変** (folded≡un-fold at base cell)。既存
-  (1,1,1) テスト・parity は無改変 pass。
+- **`repeat=(1,1,1)` の結果は物理的に不変** (folded≡un-fold at base cell、
+  検証済み: 整合的な置換のもとでエネルギーがビット一致)。ただし base cell 自体が
+  primitive cell の supercell (`n_trans>1`、bcc=16/fege=8) なので、`M=reshape_base`
+  経由の un-fold では原子番号付けが XML 順 → **cell-major に振り直される**
+  (`mc.spins` の列順が変わる)。エネルギー・per-atom 観測量は番号付けに非依存で不変。
+  parity (Simple↔optimized) は両エンジンが同一 `_enumerate_cells` 順序で一貫
+  再番号付けするため無改変 pass。ferro/基底状態エネルギーテストも pass。
+  番号付け依存の tile-major ヘルパ直接テストのみ撤去/書き換え (P2-M5)。
 - **`repeat` と `supercell_matrix` が同一結果** (両 un-fold)。
 - 低レベル縮約カーネル `_tensor_contract_*` の数式は不変 (atoms を渡す側のみ変更)。
 - メモリ/性能は folded template と同等 (O(n_templates) を保つ)。

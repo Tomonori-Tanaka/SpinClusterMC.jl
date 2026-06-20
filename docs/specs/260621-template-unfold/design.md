@@ -112,7 +112,11 @@ SAI テーブルを `_build_sai_table_n` で precompute。`LocalEnergyTemplate` 
   `test/simple/test_simple_spin_proposal.jl`: Matrix tiling) を
   un-fold cell-major 期待値に書き換えるか撤去 (§6 / tasklist P2-M5)。
 
-`repeat=(1,1,1)` は tile-major ≡ cell-major (cell 1 個) なので列順不変。
+**注意**: base cell 自体が primitive cell の supercell (`n_trans>1`、bcc=16/
+fege=8) なので、`M=reshape_base*diag(1,1,1)=reshape_base` は `det=n_trans` 個の
+セルに展開される。つまり `repeat=(1,1,1)` でも原子番号は cell-major に振り直される
+(列順不変ではない)。物理エネルギー・per-atom 観測量は番号付けに非依存で不変
+(検証済み)。parity は両エンジン一貫再番号付けで pass。番号付け依存テストのみ更新。
 
 ### folded コード撤去 (open decision 1 に従う)
 
