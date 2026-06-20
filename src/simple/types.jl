@@ -345,9 +345,11 @@ Two supercell modes (mutually exclusive):
 - `supercell_matrix = M` (3×3 integer matrix, `det(M) ≠ 0`): an **arbitrary
   supercell of the primitive cell** recovered from the XML's translation table.
   Handles non-diagonal and non-base-multiple cells (down to a single primitive
-  cell). Atoms use a primitive cell-major numbering; the energy density matches
-  the base-cell model exactly (self-overlapping "face" clusters are un-folded
-  via the multiplicity, see `build_templates`).
+  cell). Atoms use a primitive cell-major numbering; clusters are placed by their
+  relative vector and self-overlapping "face" pairs are un-folded into distinct
+  ±Δ neighbors (see `build_templates`). For a ferromagnet / ground state the
+  per-atom energy equals the base-cell model; for n > 1 non-collinear configs it
+  differs from the folded diagonal `repeat` path (and is geometrically correct).
 
 # Arguments
 

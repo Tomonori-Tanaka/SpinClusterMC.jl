@@ -24,13 +24,18 @@ jphi.xml で定義されるセル。コード中では `base_n_atoms` 個の原�
 原子数は `n_atoms = base_n_atoms × n1 × n2 × n3`。
 格子ベクトルは `[n1·a1, n2·a2, n3·a3]`。
 
-#### 一般スーパーセル行列（Simple 実装のみ）
+#### 一般スーパーセル行列
 
-`Simple.SpinClusterHamiltonian` / `Simple.SCEMC` は、対角 `repeat` に加えて
-**プリミティブセル単位の一般 3×3 整数行列** `supercell_matrix = M`
+`Simple.SpinClusterHamiltonian` / `Simple.SCEMC` と、optimized 側の
+`JPhiMagestyCarlo.load_sce_hamiltonian` / `JPhiSpinMC` は、対角 `repeat` に
+加えて **プリミティブセル単位の一般 3×3 整数行列** `supercell_matrix = M`
 （`det(M) ≠ 0`）を受け付ける。これにより非対角・非整数倍・斜めセル
 （spiral/AFM 秩序ベクトル等）や、基本セルより小さい単一プリミティブセルまで
 扱える。
+
+- optimized 側は Phase 1 として **`:tensor` カーネルのみ**対応
+  （`supercell_matrix` 指定時は自動で `:tensor` を選択。高速 `:tensor_template`
+  は対角 `repeat` 専用で、`:tensor_template` + `supercell_matrix` はエラー）。
 
 - プリミティブセルは jphi.xml の並進対称性（`map_sym` / `n_trans`）から復元する
   （`base_lattice = primitive_lattice × reshape_base`、`|det(reshape_base)| =
@@ -38,9 +43,15 @@ jphi.xml で定義されるセル。コード中では `base_n_atoms` 個の原�
 - 原子数は `n_atoms = n_prim × |det(M)|`。原子番号はプリミティブ cell-major
   （`subl + n_prim·(cell_id − 1)`）で、`repeat` パス（基本セル tile-major）とは
   異なる。
-- **エネルギー密度は基本セルモデルと厳密に一致**する。基本セルで自己重なりする
-  面上クラスター（半周期、`multiplicity ≥ 2`）は、`multiplicity ÷ s_base`
-  （`s_base` = クラスターを自分に写す基本セル並進数）で un-fold される。
+- **クラスターは相対ベクトルで定義された幾何的対象**として配置される。基本セルで
+  自己重なりする面上クラスター（半周期、`multiplicity ≥ 2`）は `multiplicity ÷
+  s_base`（`s_base` = クラスターを自分に写す基本セル並進数）で**真の ±Δ 隣接に
+  un-fold** される。
+  - **ferro / 基底状態では per-atom エネルギーが基本セルモデルと一致**するが、
+    **n>1・非共線配置では folded な対角 `repeat` パスと異なり、`supercell_matrix`
+    の方が幾何的に正しい**（`repeat` は基本セルの索引ペアを複製する有限サイズ
+    近似で、面上ペアを畳んだまま持ち越す）。Phase 2 で高速カーネルを un-fold 化
+    して `repeat` も統一予定。
 - `repeat` と `supercell_matrix` は排他（同時指定はエラー）。
 
 詳細は [`docs/specs/260620-general-supercell/`](specs/260620-general-supercell/)。

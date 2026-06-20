@@ -240,3 +240,21 @@ bcc_2x2x2 の `repeat` フィールドは XML 上は (2,2,2) 設定の派生だ�
   コストが per-sweep の delta-E 呼び出しに乗ると無視できなくなる。`SpinClusterHamiltonian`
   に opaque field として保持するか、energy module 内に lazy-init するか。Carlo の MC 型
   (M7) に保持させるのが最もスコープが狭くて良さそう。
+
+## Future work: optimized 一般スーパーセルの高速パス (Phase 2)
+
+`supercell_matrix`（一般 3×3 整数行列）対応は、Simple 全カーネルと optimized の
+`:tensor` リファレンス/キャッシュカーネルで完了している
+(spec: [`260620-general-supercell`](specs/260620-general-supercell/),
+[`260620-optimized-general-supercell`](specs/260620-optimized-general-supercell/))。
+
+未対応（Phase 2）:
+
+- **optimized の `:tensor_template` 高速パスの一般 M 対応**。現状 SAI テーブル /
+  `_tile_coords` / `_foreach_base_instance` (`src/template_energy.jl`) が対角 tile
+  前提に深く結合しており、一般 M では `:tensor` カーネルにフォールバックする。
+  primitive cell-major (cell_id + sublattice) ベースに SAI テーブルと tile 座標
+  復元を作り直せば、一般 M でもデフォルト高速パスを使える。
+- **一般 M のベンチマーク** (`benchmark/`)。Phase 1 では `:tensor` のみで
+  `:tensor_template` との非対称比較になるため、Phase 2 (高速パス対応) 後に
+  `repeat(:tensor_template)` 相当と比較するベンチを追加する。

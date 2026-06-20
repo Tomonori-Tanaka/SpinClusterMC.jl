@@ -488,9 +488,11 @@ end
     include("simple/test_simple_jphi_threshold.jl")
     include("simple/test_simple_supercell.jl")
     include("optimized/test_jphi_threshold.jl")
+    include("optimized/test_supercell_matrix.jl")
     include("parity/test_parity_bcc.jl")
     include("parity/test_parity_fege.jl")
     include("parity/test_jphi_threshold_parity.jl")
+    include("parity/test_parity_supercell_matrix.jl")
 
     if isfile(joinpath(@__DIR__, "fege_2x2x2", "jphi.xml"))
         include("fege_2x2x2/test_fege_2x2x2.jl")

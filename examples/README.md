@@ -34,6 +34,7 @@ HDF5 results). Read in numeric order:
 | 3 | `03_anisotropy_demo.jl` | Direct energy evaluation (no MC) on `fege_2x2x2` to surface the cubic anisotropy from `Lf > 0` SALCs. Compares E(+x̂), E(+ŷ), E(+ẑ), E(diagonal). |
 | 4 | `04_initial_spin_presets.jl` | Every form `init_spins(spec, n_atoms, base_n_atoms; rng)` accepts — `Symbol`, `Tuple`, `AbstractVector`, `AbstractMatrix` (`3 × base_n_atoms` or `3 × n_atoms`), `AbstractDict`. Bypasses `SCEMC` and just reports `total_energy` for each. |
 | 5 | `05_custom_observable.jl` | `params[:extra_measure]` callback in action: per-sublattice magnetization for Fe (atoms 1..64) and Rh (atoms 65..128) on `ferh_4x4x4`. Shows the indirect call chain `Carlo.measure!(mc, ctx) -> mc.extra_measure(mc, ctx)`. |
+| 6 | `06_general_supercell.jl` | `params[:supercell_matrix]`: build non-diagonal / non-base-multiple supercells from an integer matrix (primitive-cell units) and confirm the per-atom energy is intensive across cells. Contrasts with the diagonal `:repeat` path; notes the optimized engine takes the same keyword. |
 
 ---
 

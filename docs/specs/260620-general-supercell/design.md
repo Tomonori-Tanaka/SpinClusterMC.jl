@@ -2,6 +2,15 @@
 
 > 関連 spec: [requirements.md](requirements.md) / [tasklist.md](tasklist.md)
 
+> **訂正 (2026-06-21)**: 本文中「`effective_mult` un-fold で base-cell モデルと
+> 同じエネルギー密度になる」は **ferro / 基底状態に限り正確**。Magesty 規約は
+> folded で、un-fold(`supercell_matrix`)は **n>1・非共線配置では folded な
+> `repeat` パスと異なる**(クラスタを相対ベクトルで置き直す幾何的に正しい数え方;
+> `repeat` は基本セルの索引ペアを畳んだまま複製する有限サイズ近似)。user 判断で
+> **un-fold を正とする**。Phase 2 で高速カーネルを un-fold 化し `repeat` も統一予定。
+> 詳細: メモリ `project_sce_self_overlap_convention` /
+> [optimized spec](../260620-optimized-general-supercell/)。
+
 ## 1. 用語と座標系
 
 - **base cell**: `jphi.xml` が記述するセル (= Magesty 訓練スーパーセル)。

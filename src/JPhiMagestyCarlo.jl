@@ -26,6 +26,9 @@ import Serialization
 using Magesty.CoupledBases: CoupledBasis_with_coefficient
 using Magesty.XMLIO: read_salcbasis_from_xml
 using SpheriCart: SphericalHarmonics, compute, compute!
+using ..SupercellCommon: PrimitiveCell, extract_primitive, _int_det3, _adjugate3,
+                         _wrap_offset_into_supercell, _enumerate_cells,
+                         _cluster_base_stabilizer, _cluster_offsets
 
 export SCEHamiltonian,
     load_sce_hamiltonian,
@@ -61,6 +64,13 @@ struct SCEHamiltonian
     jphi::Vector{Float64}
     map_sym::Matrix{Int}
     n_trans::Int
+    # General supercell-matrix path (Phase 1, `:tensor` kernel only).
+    # `nothing`: legacy diagonal-`repeat` path (`repeat` holds the actual
+    # `(n1, n2, n3)` tiling, `prim === nothing`). `Matrix{Int}`: general
+    # supercell-matrix path — `repeat` is the `(0, 0, 0)` sentinel and `prim`
+    # carries the recovered primitive cell used to tile clusters onto it.
+    supercell_matrix::Union{Nothing, Matrix{Int}}
+    prim::Union{Nothing, PrimitiveCell}
 end
 
 """
@@ -122,8 +132,11 @@ end
 # separate OS process so this cache is not cross-rank shared memory — it only avoids
 # redundant work within the same process (e.g. register_evaluables calling
 # load_sce_hamiltonian after JPhiSpinMC is already constructed).
-const _HAM_CACHE    = Dict{Tuple{String,NTuple{3,Int},Float64}, SCEHamiltonian}()
-const _ECACHE_CACHE = Dict{Tuple{String,NTuple{3,Int},Float64}, LocalEnergyCache}()
+# The supercell descriptor `Union{Nothing,NTuple{9,Int}}` disambiguates the
+# diagonal `repeat` path (nothing) from the general `supercell_matrix` path
+# (flattened 3×3) so the two never collide in the cache.
+const _HAM_CACHE    = Dict{Tuple{String,NTuple{3,Int},Union{Nothing,NTuple{9,Int}},Float64}, SCEHamiltonian}()
+const _ECACHE_CACHE = Dict{Tuple{String,NTuple{3,Int},Union{Nothing,NTuple{9,Int}},Float64}, LocalEnergyCache}()
 
 # Caches the derived per-atom instance index structures, which are deterministically
 # computed from (ham, cache, active_body_indices) and can be expensive (~70 MiB) to
@@ -136,7 +149,12 @@ struct DerivedInstanceCache
     max_sites::Int
 end
 
-const _DERIVED_CACHE = Dict{Tuple{String,NTuple{3,Int},Float64,Tuple}, DerivedInstanceCache}()
+const _DERIVED_CACHE = Dict{Tuple{String,NTuple{3,Int},Union{Nothing,NTuple{9,Int}},Float64,Tuple}, DerivedInstanceCache}()
+
+# Canonical supercell descriptor for cache keys: `nothing` for the diagonal
+# `repeat` path, the flattened 3×3 matrix for the `supercell_matrix` path.
+_scm_key(::Nothing) = nothing
+_scm_key(M::AbstractMatrix{<:Integer})::NTuple{9, Int} = Tuple(Int.(vec(M)))
 
 """
 Return `(4π)^(n_sites/2)` normalization used for cluster contributions.
@@ -191,7 +209,50 @@ function _build_supercell_geometry(
 end
 
 """
-    load_sce_hamiltonian(xml_path; repeat=(1,1,1), jphi_threshold=0.0) -> SCEHamiltonian
+Build supercell lattice and wrapped fractional positions for the general
+supercell-matrix path: the primitive cell `prim` tiled by the integer matrix
+`M` (primitive-cell units). Atom numbering is primitive cell-major
+(`subl + n_prim*(cell_id-1)`), matching `_build_cluster_instances_matrix` via the
+shared `_enumerate_cells` ordering, so geometry and instance atom indices agree.
+"""
+function _build_supercell_geometry_matrix(prim::PrimitiveCell, M::SMatrix{3, 3, Int})
+    detM = _int_det3(M)
+    adjM = _adjugate3(M)
+    ncells = abs(detM)
+    n_prim = prim.n_prim
+    _, cells_by_id = _enumerate_cells(M, adjM, detM)
+    lattice_super = prim.lattice * Matrix{Float64}(M)
+    pos_super = zeros(3, n_prim * ncells)
+    for cid in 1:ncells
+        c = cells_by_id[cid]
+        for s in 1:n_prim
+            ia = s + n_prim * (cid - 1)
+            g = prim.pos_frac[:, s] .+ Float64.(collect(c))   # primitive coords
+            r = prim.lattice * g                              # Cartesian
+            x = lattice_super \ r
+            x .-= floor.(x)
+            pos_super[:, ia] .= x
+        end
+    end
+    return lattice_super, pos_super
+end
+
+"""
+    load_sce_hamiltonian(xml_path; repeat=(1,1,1), supercell_matrix=nothing,
+                         jphi_threshold=0.0) -> SCEHamiltonian
+
+Supercell selection (mutually exclusive):
+- `repeat = (n1, n2, n3)` (default): integer diagonal multiple of the base
+  (XML) cell. Unchanged legacy path.
+- `supercell_matrix = M` (3×3 integer, `det(M) != 0`): arbitrary supercell of
+  the primitive cell recovered from the XML translation table — non-diagonal /
+  non-base-multiple cells, down to a single primitive cell. Atoms use a
+  primitive cell-major numbering. Clusters are placed by their relative vector
+  and self-overlapping ("face") pairs are un-folded into their distinct ±Δ
+  neighbors. For a ferromagnet / ground state the per-atom energy equals the
+  base-cell model; for n > 1 non-collinear configs it differs from (and is more
+  geometrically faithful than) the folded diagonal `repeat` path. This path is
+  served by the `:tensor` kernel only (see `JPhiSpinMC`).
 
 `jphi_threshold` (eV, non-negative): SALCs whose `abs(jphi[s]) < jphi_threshold`
 are filtered out of `salc_list` / `jphi` before the Hamiltonian is built.
@@ -202,9 +263,12 @@ Throws `ArgumentError` if every SALC would be dropped.
 function load_sce_hamiltonian(
     xml_path::AbstractString;
     repeat::NTuple{3, Int} = (1, 1, 1),
+    supercell_matrix::Union{Nothing, AbstractMatrix{<:Integer}} = nothing,
     jphi_threshold::Real = 0.0,
 )::SCEHamiltonian
-    all(r -> r ≥ 1, repeat) || throw(ArgumentError("repeat must be positive integers, got $repeat"))
+    supercell_matrix === nothing &&
+        (all(r -> r ≥ 1, repeat) ||
+         throw(ArgumentError("repeat must be positive integers, got $repeat")))
     thr = Float64(jphi_threshold)
     thr ≥ 0 || throw(ArgumentError("jphi_threshold must be non-negative, got $thr"))
     basis = read_salcbasis_from_xml(xml_path)
@@ -242,18 +306,47 @@ function load_sce_hamiltonian(
     end
 
     n0 = sys.n_atoms
-    lat_s, pos_s = _build_supercell_geometry(sys.lattice, sys.pos_frac, n0, repeat)
-    n_super = n0 * repeat[1] * repeat[2] * repeat[3]
+    if supercell_matrix === nothing
+        # ---- Legacy diagonal `repeat` path (unchanged) ----
+        lat_s, pos_s = _build_supercell_geometry(sys.lattice, sys.pos_frac, n0, repeat)
+        n_super = n0 * repeat[1] * repeat[2] * repeat[3]
+        return SCEHamiltonian(
+            n_super,
+            n0,
+            repeat,
+            lat_s,
+            pos_s,
+            salc_list,
+            jphi,
+            sys.map_sym,
+            sys.n_trans,
+            nothing,
+            nothing,
+        )
+    end
+    # ---- General supercell-matrix path (primitive cell-major, :tensor only) ----
+    repeat == (1, 1, 1) ||
+        throw(ArgumentError("specify either repeat or supercell_matrix, not both"))
+    size(supercell_matrix) == (3, 3) ||
+        throw(ArgumentError("supercell_matrix must be 3×3, got $(size(supercell_matrix))"))
+    M = SMatrix{3, 3, Int}(supercell_matrix)
+    _int_det3(M) != 0 ||
+        throw(ArgumentError("supercell_matrix is singular (det = 0)"))
+    prim = extract_primitive(sys.lattice, sys.pos_frac, sys.map_sym, sys.n_trans)
+    lat_s, pos_s = _build_supercell_geometry_matrix(prim, M)
+    n_super = prim.n_prim * abs(_int_det3(M))
     return SCEHamiltonian(
         n_super,
         n0,
-        repeat,
+        (0, 0, 0),
         lat_s,
         pos_s,
         salc_list,
         jphi,
         sys.map_sym,
         sys.n_trans,
+        Matrix{Int}(supercell_matrix),
+        prim,
     )
 end
 
@@ -275,9 +368,10 @@ both the MPI coordination and the XML parse.
 function _mpi_build_ham_and_cache(
     xml_path::String,
     rep::NTuple{3, Int},
+    scm::Union{Nothing, AbstractMatrix{<:Integer}},
     thr::Float64,
 )::Tuple{SCEHamiltonian, LocalEnergyCache}
-    key = (xml_path, rep, thr)
+    key = (xml_path, rep, _scm_key(scm), thr)
     if haskey(_HAM_CACHE, key) && haskey(_ECACHE_CACHE, key)
         return _HAM_CACHE[key], _ECACHE_CACHE[key]
     end
@@ -292,7 +386,9 @@ function _mpi_build_ham_and_cache(
     # (which doesn't build the full LocalEnergyCache), so reuse the ham
     # in that case and only build the missing cache.
     ham = get!(_HAM_CACHE, key) do
-        load_sce_hamiltonian(xml_path; repeat = rep, jphi_threshold = thr)
+        scm === nothing ?
+        load_sce_hamiltonian(xml_path; repeat = rep, jphi_threshold = thr) :
+        load_sce_hamiltonian(xml_path; supercell_matrix = scm, jphi_threshold = thr)
     end
     cache = build_local_energy_cache(ham)
     _ECACHE_CACHE[key] = cache
@@ -310,12 +406,13 @@ This avoids rebuilding `_build_related_instances_by_atom` (O(n_instances × n_at
 function _get_or_build_derived(
     xml_path::String,
     rep::NTuple{3,Int},
+    scm::Union{Nothing, AbstractMatrix{<:Integer}},
     thr::Float64,
     active_body_indices::Vector{Int},
     cache::LocalEnergyCache,
     n_atoms::Int,
 )::DerivedInstanceCache
-    key = (xml_path, rep, thr, Tuple(active_body_indices))
+    key = (xml_path, rep, _scm_key(scm), thr, Tuple(active_body_indices))
     haskey(_DERIVED_CACHE, key) && return _DERIVED_CACHE[key]
     derived = DerivedInstanceCache(
         active_body_indices,
@@ -518,6 +615,7 @@ end
 Enumerate unique translated cluster instances and precompute metadata.
 """
 function _build_cluster_instances(h::SCEHamiltonian)::Vector{ClusterInstance}
+    h.supercell_matrix === nothing || return _build_cluster_instances_matrix(h)
     instances = ClusterInstance[]
     # Shared coeff_flat per unique cbc object: multiple ClusterInstances that are
     # geometric translations of the same cbc would otherwise each get a separate
@@ -542,6 +640,98 @@ function _build_cluster_instances(h::SCEHamiltonian)::Vector{ClusterInstance}
                         translated_atoms,
                         cbc,
                         js * cbc.multiplicity * scaling,
+                        inst_dims,
+                        inst_strides,
+                        inst_coeff_flat,
+                        inst_Mf_size,
+                    ),
+                )
+            end
+        end
+    end
+    return instances
+end
+
+"""
+Build cluster instances for the general supercell-matrix path (Phase 1).
+
+Mirrors `_build_cluster_instances` but tiles each coupled basis onto the
+primitive-cell supercell `M` (via `SupercellCommon`): the cluster's pivot-relative
+offsets (`_cluster_offsets`) are placed at every supercell cell and wrapped
+(`_wrap_offset_into_supercell`), using primitive cell-major atom numbering
+(`subl + n_prim*(cell_id-1)`). The XML self-overlap is un-folded
+(`effective_mult = cbc.multiplicity ÷ s_base`); placements that fold onto the
+same sorted atom set in `M` accumulate their multiplicity. The resulting
+`prefactor = jphi * total_mult * scaling` un-folds each cluster onto its distinct
+±Δ neighbors (clusters are geometric — defined by their relative vector). For a
+ferromagnet / ground state this equals the base-cell energy density; for n > 1
+non-collinear configs it differs from the folded diagonal `repeat` path and is
+the geometrically faithful one.
+
+The low-level contraction kernels (`_tensor_contract_instance*`) are unchanged;
+only the instance list this feeds differs.
+"""
+function _build_cluster_instances_matrix(h::SCEHamiltonian)::Vector{ClusterInstance}
+    prim = h.prim::PrimitiveCell
+    M = SMatrix{3, 3, Int}(h.supercell_matrix)
+    detM = _int_det3(M)
+    adjM = _adjugate3(M)
+    ncells = abs(detM)
+    n_prim = prim.n_prim
+    map_sym = h.map_sym
+    n_trans = h.n_trans
+    cell_index, cells_by_id = _enumerate_cells(M, adjM, detM)
+
+    instances = ClusterInstance[]
+    coeff_flat_cache = Dict{UInt, Vector{Float64}}()
+    for (s, group) in enumerate(h.salc_list)
+        js = h.jphi[s]
+        for cbc in group
+            N_cbc = length(cbc.atoms)
+            scaling = _cluster_scaling(N_cbc)
+            inst_dims = [2 * l + 1 for l in cbc.ls]
+            inst_strides = _compute_instance_strides(cbc.ls)
+            inst_Mf_size = size(cbc.coeff_tensor, N_cbc + 1)
+            inst_coeff_flat = get!(coeff_flat_cache, objectid(cbc)) do
+                vec(collect(Float64, cbc.coeff_tensor))
+            end
+            s_base = _cluster_base_stabilizer(cbc.atoms, map_sym, n_trans)
+            mod(cbc.multiplicity, s_base) == 0 || throw(ErrorException(
+                "multiplicity $(cbc.multiplicity) not divisible by base stabilizer " *
+                "$s_base for cluster $(collect(cbc.atoms)); cannot un-fold " *
+                "self-overlap for general supercell tiling"))
+            eff_mult = cbc.multiplicity ÷ s_base
+            _, site_subl, site_delta = _cluster_offsets(cbc.atoms, prim)
+            N = length(site_subl)
+            # Tile + accumulate-dedup by sorted atoms, summing eff_mult per fold.
+            folded = Dict{Vector{Int}, Tuple{Vector{Int}, Int}}()
+            order = Vector{Int}[]
+            for cid in 1:ncells
+                c0 = cells_by_id[cid]
+                atoms = Vector{Int}(undef, N)
+                for k in 1:N
+                    d = site_delta[k]
+                    ab = (c0[1] + d[1], c0[2] + d[2], c0[3] + d[3])
+                    w = _wrap_offset_into_supercell(ab, M, adjM, detM)
+                    atoms[k] = site_subl[k] + n_prim * (cell_index[w] - 1)
+                end
+                key = sort(atoms)
+                if haskey(folded, key)
+                    prev_atoms, prev_mult = folded[key]
+                    folded[key] = (prev_atoms, prev_mult + eff_mult)
+                else
+                    folded[key] = (atoms, eff_mult)
+                    push!(order, key)
+                end
+            end
+            for key in order
+                atoms, mult = folded[key]
+                push!(
+                    instances,
+                    ClusterInstance(
+                        atoms,
+                        cbc,
+                        js * mult * scaling,
                         inst_dims,
                         inst_strides,
                         inst_coeff_flat,
@@ -636,11 +826,21 @@ j0 is intentionally excluded because this package is used for MC sampling where 
 supercell atoms (`a` → column `a`). Only the column count is checked here; each column is passed to
 `SpheriCart.compute` as a 3-vector inside `coupled_cluster_energy`. Shape matches `h.map_sym`, `h.repeat`, and
 `h.base_n_atoms` as in that routine.
+
+For the general `supercell_matrix` path this rebuilds the instance list and sums
+`_energy_from_instances`; it is a reference/validation entry point (the MC hot
+path uses the prebuilt `LocalEnergyCache`), so the per-call rebuild is acceptable.
 """
 function sce_energy(
     h::SCEHamiltonian,
     spin_directions::Union{AbstractMatrix{<:Real},AbstractVector{<:SVector{3,<:Real}}},
 )::Float64
+    # General supercell-matrix path: sum over the prebuilt matrix instances
+    # (the diagonal `coupled_cluster_energy` tiling does not apply when
+    # `repeat == (0, 0, 0)`).
+    if h.supercell_matrix !== nothing
+        return _energy_from_instances(_build_cluster_instances(h), spin_directions)
+    end
     E = 0.0
     n1, n2, n3 = h.repeat
     # Recover base-cell fractional positions from supercell positions (tile-(0,0,0) block).
@@ -709,7 +909,8 @@ Carlo.start(Carlo.SingleScheduler, job)
 ## Geometry
 | Key | Type | Default | Description |
 |:----|:-----|:--------|:------------|
-| `:repeat` or `:supercell` | 3-vector of `Int` | `(1,1,1)` | Tiling of the primitive cell read from the XML. Total atom count becomes `base_n_atoms × n₁ × n₂ × n₃`. |
+| `:repeat` or `:supercell` | 3-vector of `Int` | `(1,1,1)` | Diagonal tiling of the base (XML) cell. Total atom count becomes `base_n_atoms × n₁ × n₂ × n₃`. |
+| `:supercell_matrix` | `Matrix{Int}` (3×3) | — | General integer supercell of the primitive cell (non-diagonal / non-base-multiple). Mutually exclusive with `:repeat`/`:supercell`. Forces `:energy_kernel = :tensor` (the `:tensor_template` fast path is diagonal-only; combining it with `:supercell_matrix` errors). `:initial_spins` base-cell tiling is unavailable on this path (use random init). |
 
 ## Initial spin configuration
 | Key | Type | Default | Description |
@@ -802,6 +1003,9 @@ mutable struct JPhiSpinMC{S<:SphericalHarmonics} <: AbstractMC
     # excluded from the serialized representation to avoid OOM on the root rank.
     xml_path::String
     repeat::NTuple{3,Int}
+    # `nothing` for the diagonal `repeat` path; the general supercell matrix
+    # (primitive-cell units, `:tensor` kernel only) otherwise.
+    supercell_matrix::Union{Nothing,Matrix{Int}}
     jphi_threshold::Float64
     enabled_bodies::Union{Nothing,Vector{Int}}
     # `:tensor_template` (default) uses base-cell cluster templates with on-the-fly
@@ -856,6 +1060,19 @@ function JPhiSpinMC(params::AbstractDict)
     else
         :tensor_template
     end
+    scm = _parse_supercell_matrix_param(params)
+    if scm !== nothing
+        rep == (1, 1, 1) || throw(ArgumentError(
+            "specify either repeat/supercell or supercell_matrix, not both"))
+        # Phase 1: the general supercell matrix is served by the :tensor kernel
+        # only (the :tensor_template fast path stays diagonal-only).
+        (haskey(params, :energy_kernel) && Symbol(params[:energy_kernel]) === :tensor_template) &&
+            throw(ArgumentError(
+                "energy_kernel=:tensor_template is not supported with " *
+                "supercell_matrix (Phase 1); use energy_kernel=:tensor (forced " *
+                "automatically) or the diagonal repeat path"))
+        energy_kernel = :tensor
+    end
     spin_theta_max = if haskey(params, :spin_theta_max)
         θ = Float64(params[:spin_theta_max])
         θ > 0.0 || throw(ArgumentError("spin_theta_max must be positive, got $θ"))
@@ -874,7 +1091,7 @@ function JPhiSpinMC(params::AbstractDict)
     if energy_kernel === :tensor_template
         # Skip the O(n_atoms × n_base) full cache build. Build only the ham and
         # derive max_l / max_sites / body_list directly from the SALC list.
-        ham = get!(_HAM_CACHE, (xml, rep, thr)) do
+        ham = get!(_HAM_CACHE, (xml, rep, nothing, thr)) do
             load_sce_hamiltonian(xml; repeat = rep, jphi_threshold = thr)
         end
         max_l, max_sites, body_list = _salc_max_l_max_sites_bodies(ham, enabled_bodies)
@@ -904,15 +1121,15 @@ function JPhiSpinMC(params::AbstractDict)
             max_l, zlm_cache, zlm_row_buf, sph,
             other_sites_buf, cart_idx_buf,
             spin_theta_max, renorm_every, 0,
-            xml, rep, thr, enabled_bodies, energy_kernel,
+            xml, rep, nothing, thr, enabled_bodies, energy_kernel,
             local_template, atoms_buf,
         )
     end
 
     # :tensor path: build the full LocalEnergyCache.
-    ham, cache = _mpi_build_ham_and_cache(xml, rep, thr)
+    ham, cache = _mpi_build_ham_and_cache(xml, rep, scm, thr)
     active_body_indices = _parse_enabled_body_indices(params, cache.body_list)
-    derived = _get_or_build_derived(xml, rep, thr, active_body_indices, cache, ham.n_atoms)
+    derived = _get_or_build_derived(xml, rep, scm, thr, active_body_indices, cache, ham.n_atoms)
     zlm_cache = _alloc_zlm_cache(ham.n_atoms, derived.max_l)
     zlm_row_buf = Vector{Float64}(undef, (derived.max_l + 1)^2)
     sph = SphericalHarmonics(derived.max_l)
@@ -938,6 +1155,7 @@ function JPhiSpinMC(params::AbstractDict)
         0,
         xml,
         rep,
+        scm,
         thr,
         enabled_bodies,
         energy_kernel,
@@ -1142,6 +1360,19 @@ function _parse_repeat_param(params::AbstractDict)::NTuple{3, Int}
     return (1, 1, 1)
 end
 
+# Read params[:supercell_matrix] (3×3 integer matrix) if present, else nothing.
+function _parse_supercell_matrix_param(params::AbstractDict)::Union{Nothing, Matrix{Int}}
+    haskey(params, :supercell_matrix) || return nothing
+    M = params[:supercell_matrix]
+    M isa AbstractMatrix || throw(ArgumentError(
+        ":supercell_matrix must be a 3×3 integer matrix; got $(typeof(M))"))
+    size(M) == (3, 3) ||
+        throw(ArgumentError(":supercell_matrix must be 3×3; got $(size(M))"))
+    all(x -> isinteger(x), M) ||
+        throw(ArgumentError(":supercell_matrix must have integer entries; got $M"))
+    return Matrix{Int}(M)
+end
+
 """
 Evaluate one instance contraction using precomputed per-atom `Z_lm` cache.
 """
@@ -1303,6 +1534,10 @@ stored energy are rebuilt consistently.
 function Carlo.init!(mc::JPhiSpinMC, ctx::MCContext, params::AbstractDict)
     n = mc.ham.n_atoms
     if haskey(params, :initial_spins)
+        mc.supercell_matrix === nothing || throw(ArgumentError(
+            "initial_spins (base-cell tiling) is not supported with " *
+            "supercell_matrix (atom numbering is primitive cell-major); use " *
+            "random initialization"))
         _tile_base_spins!(mc.spins, params[:initial_spins], mc.ham.base_n_atoms)
     else
         for i in 1:n
@@ -1428,13 +1663,18 @@ end
 
 function Carlo.register_evaluables(::Type{<:JPhiSpinMC}, eval::AbstractEvaluator, params::AbstractDict)
     T = Float64(params[:T])
-    key = (params[:xml_path], _parse_repeat_param(params), _parse_jphi_threshold_param(params))
+    rep = _parse_repeat_param(params)
+    scm = _parse_supercell_matrix_param(params)
+    thr = _parse_jphi_threshold_param(params)
+    key = (params[:xml_path], rep, _scm_key(scm), thr)
     # Use the process-local cache if available (populated by JPhiSpinMC constructor),
     # avoiding a redundant full XML parse + cluster enumeration on every rank.
     n = if haskey(_HAM_CACHE, key)
         _HAM_CACHE[key].n_atoms
+    elseif scm === nothing
+        load_sce_hamiltonian(params[:xml_path]; repeat = rep, jphi_threshold = thr).n_atoms
     else
-        load_sce_hamiltonian(key[1]; repeat = key[2], jphi_threshold = key[3]).n_atoms
+        load_sce_hamiltonian(params[:xml_path]; supercell_matrix = scm, jphi_threshold = thr).n_atoms
     end
     evaluate!(eval, :SpecificHeat, (:Energy2, :Energy)) do e2, e
         return n * (e2 - e^2) / T^2
@@ -1474,6 +1714,7 @@ function Serialization.serialize(s::Serialization.AbstractSerializer, mc::JPhiSp
     Serialization.serialize(s, mc.energy)
     Serialization.serialize(s, mc.xml_path)
     Serialization.serialize(s, mc.repeat)
+    Serialization.serialize(s, mc.supercell_matrix)
     Serialization.serialize(s, mc.jphi_threshold)
     Serialization.serialize(s, mc.spin_theta_max)
     Serialization.serialize(s, mc.renorm_every)
@@ -1491,6 +1732,7 @@ function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{<
     energy       = Serialization.deserialize(s)::Float64
     xml_path     = Serialization.deserialize(s)::String
     repeat       = Serialization.deserialize(s)::NTuple{3,Int}
+    supercell_matrix = Serialization.deserialize(s)::Union{Nothing,Matrix{Int}}
     jphi_threshold = Serialization.deserialize(s)::Float64
     spin_theta_max = Serialization.deserialize(s)
     renorm_every = Serialization.deserialize(s)::Int
@@ -1501,10 +1743,11 @@ function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{<
     # Use the process-local cache (populated at startup via _mpi_build_ham_and_cache).
     # On rank 0, this is called 32 times during Carlo's PT checkpoint gather;
     # the cache ensures ham/local_cache are NOT rebuilt 32 times.
-    ham, cache = _mpi_build_ham_and_cache(xml_path, repeat, jphi_threshold)
+    ham, cache = _mpi_build_ham_and_cache(xml_path, repeat, supercell_matrix, jphi_threshold)
 
     active_body_indices = _enabled_bodies_to_active_indices(enabled_bodies, cache.body_list)
-    derived = _get_or_build_derived(xml_path, repeat, jphi_threshold, active_body_indices, cache, ham.n_atoms)
+    derived = _get_or_build_derived(
+        xml_path, repeat, supercell_matrix, jphi_threshold, active_body_indices, cache, ham.n_atoms)
     zlm_cache = _alloc_zlm_cache(ham.n_atoms, derived.max_l)
     zlm_row_buf = Vector{Float64}(undef, (derived.max_l + 1)^2)
     sph = SphericalHarmonics(derived.max_l)
@@ -1521,7 +1764,7 @@ function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{<
         derived.max_l, zlm_cache, zlm_row_buf, sph,
         Vector{Int}(undef, derived.max_sites), Vector{Int}(undef, derived.max_sites),
         spin_theta_max, renorm_every, sweep_count,
-        xml_path, repeat, jphi_threshold, enabled_bodies,
+        xml_path, repeat, supercell_matrix, jphi_threshold, enabled_bodies,
         energy_kernel, local_template, atoms_buf,
     )
     _rebuild_zlm_cache!(mc)

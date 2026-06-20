@@ -10,7 +10,7 @@ Reads interaction parameters from [Magesty.jl](https://github.com/Tomonori-Tanak
 - **Metropolis Monte Carlo** — independent simulations at arbitrary temperatures
 - **Parallel Tempering** — replica-exchange MC for efficient sampling across a temperature range
 - **Geodesic spin proposal** — configurable random walk on the unit sphere for improved acceptance at low temperature
-- **Supercell tiling** — tile the primitive cell to any `(n₁, n₂, n₃)` supercell
+- **Supercell tiling** — diagonal `(n₁, n₂, n₃)` multiples of the training cell, or an arbitrary integer `supercell_matrix` (non-diagonal / non-multiple cells in primitive-cell units)
 - **HDF5 checkpointing** — resume interrupted runs via Carlo.jl
 - **MPI parallelization** — distribute tasks (Metropolis) or replicas (parallel tempering) across MPI ranks
 - **Efficient energy evaluation** — preallocated tensor contractions and cached spherical harmonics in the Metropolis hot path
@@ -86,7 +86,8 @@ mpiexec -n <nprocs> julia example_job.jl run   # MPI (tasks run in parallel)
 | `thermalization` | `Int` | Equilibration sweeps (excluded from measurements) |
 | `binsize` | `Int` | Bin size for autocorrelation error estimation |
 | `spin_theta_max` | `Float64` or `nothing` | Geodesic proposal half-angle in radians; `nothing` → uniform random spin on full sphere |
-| `supercell` / `repeat` | `Tuple{Int,Int,Int}` | Tile the primitive cell `(n₁,n₂,n₃)` times |
+| `supercell` / `repeat` | `Tuple{Int,Int,Int}` | Diagonal tiling of the training cell `(n₁,n₂,n₃)` times |
+| `supercell_matrix` | `Matrix{Int}` (3×3) | General integer supercell of the primitive cell (non-diagonal / non-multiple cells). Mutually exclusive with `repeat`/`supercell`. The optimized engine runs the `:tensor` kernel for a general matrix. |
 | `seed` | `Int` | Random seed |
 
 ### Temperature units
