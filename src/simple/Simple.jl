@@ -10,6 +10,7 @@ tests under `test/parity/`. See `docs/specs/260512-simple-impl/` for the design.
 module Simple
 
 include("xml_io.jl")
+include("supercell.jl")
 include("types.jl")
 include("cg.jl")
 include("energy.jl")

@@ -486,6 +486,7 @@ end
     include("simple/test_simple_spin_proposal.jl")
     include("simple/test_simple_mc.jl")
     include("simple/test_simple_jphi_threshold.jl")
+    include("simple/test_simple_supercell.jl")
     include("optimized/test_jphi_threshold.jl")
     include("parity/test_parity_bcc.jl")
     include("parity/test_parity_fege.jl")

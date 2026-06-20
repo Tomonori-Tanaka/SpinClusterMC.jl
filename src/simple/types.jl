@@ -191,13 +191,16 @@ positions, it should reload them from the XML or carry them itself.
 
 # Sizes
 
-- `n_atoms::Int` — total atom count of the supercell, equal to
-  `base_n_atoms · n_1 · n_2 · n_3` where `(n_1, n_2, n_3) = repeat`.
+- `n_atoms::Int` — total atom count of the supercell:
+  `base_n_atoms · n_1 · n_2 · n_3` for the `repeat` path, or
+  `n_prim · |det(M)|` for the `supercell_matrix = M` path.
 - `base_n_atoms::Int` — atom count of the base cell (`<NumberOfAtoms>` in
   the XML).
 - `repeat::NTuple{3,Int}` — tile factors `(n_1, n_2, n_3)` along the three
   base-lattice directions. `(1, 1, 1)` means "no tiling — supercell equals
-  base cell". All entries must be `≥ 1`; enforced by the outer constructor.
+  base cell". All entries must be `≥ 1` for the `repeat` path. **`(0, 0, 0)`
+  is a sentinel meaning the Hamiltonian was built via `supercell_matrix`** (a
+  general matrix has no diagonal tile factors).
 
 # Hamiltonian content
 
@@ -327,16 +330,30 @@ function _generate_instances(
 end
 
 """
-    SpinClusterHamiltonian(xml_path; repeat=(1, 1, 1), jphi_threshold=0.0)
-        -> SpinClusterHamiltonian
+    SpinClusterHamiltonian(xml_path; repeat=(1, 1, 1), supercell_matrix=nothing,
+                           jphi_threshold=0.0) -> SpinClusterHamiltonian
 
 Load a Magesty `jphi.xml` and build the full Hamiltonian: parse the XML,
-generate one `ClusterInstance` per `(SALC basis, translation, tile)` triple
-(with per-basis deduplication), and build the tesseral CG table.
+generate the cluster instances for the requested supercell, and build the
+tesseral CG table.
+
+Two supercell modes (mutually exclusive):
+
+- `repeat = (n_1, n_2, n_3)` (default): an integer **diagonal multiple of the
+  base (XML) cell**. Uses the original `_generate_instances` path, so behavior
+  and atom numbering are unchanged.
+- `supercell_matrix = M` (3×3 integer matrix, `det(M) ≠ 0`): an **arbitrary
+  supercell of the primitive cell** recovered from the XML's translation table.
+  Handles non-diagonal and non-base-multiple cells (down to a single primitive
+  cell). Atoms use a primitive cell-major numbering; the energy density matches
+  the base-cell model exactly (self-overlapping "face" clusters are un-folded
+  via the multiplicity, see `build_templates`).
 
 # Arguments
 
 - `repeat`: Supercell tile factors `(n_1, n_2, n_3)`; all entries must be `≥ 1`.
+- `supercell_matrix`: 3×3 integer matrix in primitive-cell units, or `nothing`.
+  Cannot be combined with a non-default `repeat`.
 - `jphi_threshold`: Drop SALCs with `|J_s| < jphi_threshold` (eV) before
   building cluster instances. Use this to skip near-zero couplings produced
   by sparse-modeled `jphi.xml`. Must be non-negative. Default `0.0` keeps
@@ -347,53 +364,85 @@ generate one `ClusterInstance` per `(SALC basis, translation, tile)` triple
 function SpinClusterHamiltonian(
         xml_path::AbstractString;
         repeat::NTuple{3, Int} = (1, 1, 1),
+        supercell_matrix::Union{Nothing, AbstractMatrix{<:Integer}} = nothing,
         jphi_threshold::Real = 0.0
 )::SpinClusterHamiltonian
-    all(>(0), repeat) || throw(
-        ArgumentError("repeat factors must be positive integers, got $repeat")
-    )
     thr = Float64(jphi_threshold)
     thr ≥ 0 ||
         throw(ArgumentError("jphi_threshold must be non-negative, got $thr"))
     data = parse_jphi_xml(xml_path)
     base_n = data.system.n_atoms
-    n1, n2, n3 = repeat
-    n_super = base_n * n1 * n2 * n3
-    # Short-circuit when thr == 0.0: skip the filter accounting and log so the
-    # code path matches the pre-threshold behavior exactly.
-    if thr > 0
-        n_total = length(data.jphi)
-        n_kept = count(j -> abs(j) ≥ thr, data.jphi)
-        n_dropped = n_total - n_kept
-        if n_kept == 0
-            max_abs = n_total == 0 ? 0.0 : maximum(abs, data.jphi)
-            throw(ArgumentError(
-                "jphi_threshold=$thr eV filters out all $n_total SALCs " *
-                "(max |J|=$max_abs eV); Hamiltonian would be empty"
-            ))
+
+    if supercell_matrix === nothing
+        # ---- Legacy path: diagonal `repeat` of the base cell ----
+        # Unchanged from the pre-supercell_matrix implementation, so existing
+        # behavior / tests / PT serialization stay bit-for-bit identical.
+        all(>(0), repeat) || throw(
+            ArgumentError("repeat factors must be positive integers, got $repeat")
+        )
+        n1, n2, n3 = repeat
+        n_super = base_n * n1 * n2 * n3
+        # Short-circuit when thr == 0.0 so the code path matches exactly.
+        if thr > 0
+            n_total = length(data.jphi)
+            n_kept = count(j -> abs(j) ≥ thr, data.jphi)
+            n_dropped = n_total - n_kept
+            if n_kept == 0
+                max_abs = n_total == 0 ? 0.0 : maximum(abs, data.jphi)
+                throw(ArgumentError(
+                    "jphi_threshold=$thr eV filters out all $n_total SALCs " *
+                    "(max |J|=$max_abs eV); Hamiltonian would be empty"
+                ))
+            end
+            if n_dropped > 0
+                max_dropped = maximum(
+                    abs(j) for j in data.jphi if abs(j) < thr; init = 0.0
+                )
+                @debug "Dropped $n_dropped / $n_total SALCs below " *
+                       "jphi_threshold=$thr eV (max dropped |J|=$max_dropped eV)"
+            end
         end
-        if n_dropped > 0
-            max_dropped = maximum(
-                abs(j) for j in data.jphi if abs(j) < thr; init = 0.0
-            )
-            @debug "Dropped $n_dropped / $n_total SALCs below " *
-                   "jphi_threshold=$thr eV (max dropped |J|=$max_dropped eV)"
-        end
+        instances = _generate_instances(
+            data.salcs, data.jphi, data.system.map_sym, data.system.pos_frac,
+            base_n, repeat; jphi_threshold = thr
+        )
+        repeat_field = repeat
+        n_atoms = n_super
+    else
+        # ---- General path: arbitrary integer supercell matrix M ----
+        repeat == (1, 1, 1) || throw(ArgumentError(
+            "specify either repeat or supercell_matrix, not both"
+        ))
+        size(supercell_matrix) == (3, 3) || throw(ArgumentError(
+            "supercell_matrix must be 3×3, got $(size(supercell_matrix))"
+        ))
+        M = SMatrix{3, 3, Int}(supercell_matrix)
+        _int_det3(M) != 0 ||
+            throw(ArgumentError("supercell_matrix is singular (det = 0)"))
+        prim = extract_primitive(data.system)
+        templates = build_templates(
+            data.salcs, data.jphi, data.system, prim; jphi_threshold = thr
+        )
+        isempty(templates) && throw(ArgumentError(
+            "jphi_threshold=$thr eV filters out all SALCs; Hamiltonian " *
+            "would be empty"
+        ))
+        instances, n_atoms = _generate_instances_matrix(templates, prim, M)
+        # `repeat` is meaningless for a general matrix; use a sentinel so the
+        # struct is unchanged and consumers can detect the matrix path.
+        repeat_field = (0, 0, 0)
     end
-    instances = _generate_instances(
-        data.salcs, data.jphi, data.system.map_sym, data.system.pos_frac,
-        base_n, repeat; jphi_threshold = thr
-    )
+
     # cg_table is built from the unfiltered SALC list. Dropped SALCs produce
     # no instances, so their (ls, Lf, Lseq) keys are never looked up at
     # evaluation time — the extra entries are harmless and cheap.
     cg_table = build_cg_table(data.salcs)
     max_l = _max_l_in_instances(instances)
-    atom_to_instance_indices = _build_atom_to_instance_indices(instances, n_super)
+    atom_to_instance_indices = _build_atom_to_instance_indices(instances, n_atoms)
     return SpinClusterHamiltonian(
-        n_super,
+        n_atoms,
         base_n,
-        repeat,
+        repeat_field,
         instances,
         cg_table,
         max_l,

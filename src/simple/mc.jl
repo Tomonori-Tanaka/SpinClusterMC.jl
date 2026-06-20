@@ -27,7 +27,8 @@ for the wider convention.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `:repeat` | `(1, 1, 1)` | Supercell tile factors. |
+| `:repeat` | `(1, 1, 1)` | Diagonal supercell tile factors of the base cell. |
+| `:supercell_matrix` | `nothing` | 3×3 integer matrix for a general (non-diagonal / non-base-multiple) supercell of the primitive cell. Mutually exclusive with `:repeat`. See `SpinClusterHamiltonian`. |
 | `:jphi_threshold` | `0.0` | Drop SALCs with `|J_s| < jphi_threshold` (eV). Use with sparse-modeled `jphi.xml`. See `SpinClusterHamiltonian`. |
 | `:external` | `nothing` | An `ExternalTerm` (`Zeeman`, …) added on top of the SCE energy. |
 | `:spin_theta_max` | `π` | Geodesic proposal half-width **in radians**; `π` ≈ uniform-sphere proposals, smaller values give finer local moves. |
@@ -105,7 +106,9 @@ further field plumbing. Otherwise unused.
 - `xml_path::String` — original XML location; PT serialize uses it to rebuild
   the Hamiltonian after a coordinator-rank gather.
 - `repeat::NTuple{3, Int}` — the tile factors that the Hamiltonian was built
-  with; same purpose as `xml_path`.
+  with; same purpose as `xml_path`. `(0, 0, 0)` when built via `supercell_matrix`.
+- `supercell_matrix::Union{Nothing, Matrix{Int}}` — the general supercell matrix
+  when that path was used (else `nothing`); same rebuild purpose as `xml_path`.
 """
 mutable struct SCEMC{E <: Union{Nothing, ExternalTerm}} <: Carlo.AbstractMC
     h::SpinClusterHamiltonian
@@ -121,6 +124,7 @@ mutable struct SCEMC{E <: Union{Nothing, ExternalTerm}} <: Carlo.AbstractMC
     # PT-future-work fields (not used in v1; kept for serialize round-trip).
     xml_path::String
     repeat::NTuple{3, Int}
+    supercell_matrix::Union{Nothing, Matrix{Int}}
 end
 
 function _params_jphi_threshold(params::AbstractDict)::Float64
@@ -144,6 +148,45 @@ function _params_repeat(params::AbstractDict)::NTuple{3, Int}
         ArgumentError(
         "params[:repeat] must be a 3-tuple or 3-vector of Int; got $(typeof(rep))"
     )
+    )
+end
+
+# Read params[:supercell_matrix] (3×3 integer matrix) if present, else nothing.
+function _params_supercell_matrix(params::AbstractDict)::Union{Nothing, Matrix{Int}}
+    haskey(params, :supercell_matrix) || return nothing
+    M = params[:supercell_matrix]
+    M isa AbstractMatrix || throw(ArgumentError(
+        "params[:supercell_matrix] must be a 3×3 integer matrix; got $(typeof(M))"
+    ))
+    size(M) == (3, 3) || throw(ArgumentError(
+        "params[:supercell_matrix] must be 3×3; got $(size(M))"
+    ))
+    all(x -> isinteger(x), M) || throw(ArgumentError(
+        "params[:supercell_matrix] must have integer entries; got $M"
+    ))
+    return Matrix{Int}(M)
+end
+
+# Build the Hamiltonian from params, honoring the `repeat` (diagonal) vs
+# `supercell_matrix` (general) modes. Shared by the SCEMC constructor and
+# `register_evaluables` so both agree on the supercell and n_atoms.
+function _build_hamiltonian(params::AbstractDict)::SpinClusterHamiltonian
+    xml_path = String(params[:xml_path])
+    jphi_threshold = _params_jphi_threshold(params)
+    scm = _params_supercell_matrix(params)
+    if scm === nothing
+        return SpinClusterHamiltonian(
+            xml_path; repeat = _params_repeat(params), jphi_threshold = jphi_threshold
+        )
+    end
+    # Match the SpinClusterHamiltonian constructor: a non-default :repeat
+    # alongside :supercell_matrix is the conflict, not the mere presence of a
+    # default :repeat.
+    _params_repeat(params) == (1, 1, 1) || throw(ArgumentError(
+        "SCEMC: specify either params[:repeat] or params[:supercell_matrix], not both"
+    ))
+    return SpinClusterHamiltonian(
+        xml_path; supercell_matrix = scm, jphi_threshold = jphi_threshold
     )
 end
 
@@ -171,7 +214,7 @@ function SCEMC(params::AbstractDict)
         throw(ArgumentError("SCEMC: params[:xml_path] is required"))
     T_eV = _params_T_eV(params)
     xml_path = String(params[:xml_path])
-    repeat = _params_repeat(params)
+    supercell_matrix = _params_supercell_matrix(params)
     external = get(params, :external, nothing)
     if !(external isa Union{Nothing, ExternalTerm})
         throw(
@@ -191,8 +234,7 @@ function SCEMC(params::AbstractDict)
     )
     )
 
-    jphi_threshold = _params_jphi_threshold(params)
-    h = SpinClusterHamiltonian(xml_path; repeat = repeat, jphi_threshold = jphi_threshold)
+    h = _build_hamiltonian(params)
     spins = Matrix{Float64}(undef, 3, h.n_atoms)
     return SCEMC(
         h,
@@ -206,7 +248,8 @@ function SCEMC(params::AbstractDict)
         extra_measure,
         extra_evaluables,
         xml_path,
-        repeat
+        h.repeat,           # (0,0,0) sentinel when built via supercell_matrix
+        supercell_matrix
     )
 end
 
@@ -263,6 +306,17 @@ function Carlo.init!(mc::SCEMC, ctx::Carlo.MCContext, params::AbstractDict)
     n_atoms = mc.h.n_atoms
     base_n_atoms = mc.h.base_n_atoms
     spec = get(params, :initial_spins, :random)
+    # The general supercell_matrix path numbers atoms primitive cell-major, so a
+    # base-cell-sized initial_spins pattern cannot be tiled (the `% base_n_atoms`
+    # mapping would scramble sublattices). Require :random or a full config.
+    if mc.supercell_matrix !== nothing && spec isa AbstractMatrix &&
+       size(spec, 2) == base_n_atoms && base_n_atoms != n_atoms
+        throw(ArgumentError(
+            "initial_spins base-cell tiling (size $(size(spec))) is not " *
+            "supported with supercell_matrix; provide a full 3×$n_atoms " *
+            "configuration or use :random"
+        ))
+    end
     initial = init_spins(spec, n_atoms, base_n_atoms; rng = ctx.rng)
     @inbounds for i in 1:n_atoms
         mc.spins[1, i] = initial[1, i]
@@ -333,16 +387,12 @@ function Carlo.register_evaluables(
         ::Type{<:SCEMC}, eval::Carlo.AbstractEvaluator, params::AbstractDict
 )
     T_eV = _params_T_eV(params)
-    xml_path = String(params[:xml_path])
-    repeat = _params_repeat(params)
-    jphi_threshold = _params_jphi_threshold(params)
     # n_atoms is needed for the per-atom -> total conversion in the
     # specific-heat and susceptibility formulas. The MC instance isn't
     # passed here, so we rebuild a Hamiltonian shell (cheap relative to the
-    # whole simulation) to read it. `jphi_threshold` does not affect n_atoms
-    # but we pass it for consistency so the rebuilt Hamiltonian matches the
-    # one held by SCEMC (e.g. for any user-side introspection).
-    h = SpinClusterHamiltonian(xml_path; repeat = repeat, jphi_threshold = jphi_threshold)
+    # whole simulation) to read it, honoring the same repeat / supercell_matrix
+    # / jphi_threshold params as the SCEMC constructor.
+    h = _build_hamiltonian(params)
     n = h.n_atoms
     evaluate!(eval, :SpecificHeat, (:Energy2, :Energy)) do e2, e
         return n * (e2 - e * e) / (T_eV * T_eV)
