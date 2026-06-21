@@ -63,12 +63,13 @@ struct SCEHamiltonian
     jphi::Vector{Float64}
     map_sym::Matrix{Int}
     n_trans::Int
-    # General supercell-matrix path (un-fold; both `:tensor` and
-    # `:tensor_template` kernels). `nothing`: legacy diagonal-`repeat` path
-    # (`repeat` holds the actual
-    # `(n1, n2, n3)` tiling, `prim === nothing`). `Matrix{Int}`: general
-    # supercell-matrix path — `repeat` is the `(0, 0, 0)` sentinel and `prim`
-    # carries the recovered primitive cell used to tile clusters onto it.
+    # Un-fold supercell (both `:tensor` and `:tensor_template` kernels). After
+    # Phase 2 these are ALWAYS set: `load_sce_hamiltonian` converts `repeat` to
+    # `M = reshape_base * diag(repeat)`, so every Hamiltonian carries its matrix
+    # `M` and recovered primitive cell `prim`. `repeat` records the user-facing
+    # tile factors (the `(0, 0, 0)` sentinel marks a directly-specified matrix).
+    # (The `Union{Nothing, …}` types are retained for serialization layout; the
+    # `nothing` case no longer occurs on the live construction path.)
     supercell_matrix::Union{Nothing, Matrix{Int}}
     prim::Union{Nothing, PrimitiveCell}
 end
@@ -194,18 +195,22 @@ end
     load_sce_hamiltonian(xml_path; repeat=(1,1,1), supercell_matrix=nothing,
                          jphi_threshold=0.0) -> SCEHamiltonian
 
-Supercell selection (mutually exclusive):
-- `repeat = (n1, n2, n3)` (default): integer diagonal multiple of the base
-  (XML) cell. Unchanged legacy path.
+Supercell selection (mutually exclusive); both take the same un-fold path:
+- `repeat = (n1, n2, n3)` (default): sugar for
+  `supercell_matrix = reshape_base * diag(n1, n2, n3)`. Because the base (XML)
+  cell is itself a supercell of the primitive cell, even `repeat = (1, 1, 1)`
+  un-folds into the primitive cells with cell-major numbering; the physical
+  energy is unchanged but the atom index → atom map is no longer the historical
+  tile-major one.
 - `supercell_matrix = M` (3×3 integer, `det(M) != 0`): arbitrary supercell of
   the primitive cell recovered from the XML translation table — non-diagonal /
-  non-base-multiple cells, down to a single primitive cell. Atoms use a
-  primitive cell-major numbering. Clusters are placed by their relative vector
-  and self-overlapping ("face") pairs are un-folded into their distinct ±Δ
-  neighbors. For a ferromagnet / ground state the per-atom energy equals the
-  base-cell model; for n > 1 non-collinear configs it differs from (and is more
-  geometrically faithful than) the folded diagonal `repeat` path. Both the
-  `:tensor` and `:tensor_template` kernels serve this path (see `JPhiSpinMC`).
+  non-base-multiple cells, down to a single primitive cell.
+
+Both modes use primitive cell-major atom numbering; clusters are placed by their
+relative vector and self-overlapping ("face") pairs are un-folded into their
+distinct ±Δ neighbors. `repeat` and the equivalent `supercell_matrix` produce an
+identical Hamiltonian. Both the `:tensor` and `:tensor_template` kernels serve
+this path (see `JPhiSpinMC`).
 
 `jphi_threshold` (eV, non-negative): SALCs whose `abs(jphi[s]) < jphi_threshold`
 are filtered out of `salc_list` / `jphi` before the Hamiltonian is built.
@@ -686,7 +691,7 @@ Carlo.start(Carlo.SingleScheduler, job)
 ## Energy kernel
 | Key | Type | Default | Description |
 |:----|:-----|:--------|:------------|
-| `:energy_kernel` | `Symbol` | `:tensor_template` | `:tensor_template` (default) stores only base-cell cluster instances and reconstructs supercell atom indices on-the-fly during `sweep!`, giving O(n_base_instances) memory regardless of supercell size. N=2 / N=3 instances use SVector-specialized contraction kernels. `:tensor` enumerates every translated instance up front — uses more memory and is mainly kept as a validation reference. The two kernels agree to within floating-point summation order. See [`build_local_energy_template`](@ref). |
+| `:energy_kernel` | `Symbol` | `:tensor_template` | `:tensor_template` (default) stores one `PrimClusterTemplate` per (salc, cbc) plus a per-atom cell-major `UnfoldSAITable`, and reconstructs supercell atom indices on-the-fly during `sweep!` — O(n_templates) memory regardless of supercell size. A single generic contraction kernel (`_tensor_contract_unfold_changed!`) handles all body sizes. `:tensor` enumerates every cluster instance up front — uses more memory and is mainly kept as a validation reference. The two kernels agree to within floating-point summation order. See [`build_local_energy_template`](@ref). |
 
 ## Carlo scheduler
 | Key | Type | Description |
@@ -754,10 +759,11 @@ mutable struct JPhiSpinMC{S<:SphericalHarmonics} <: AbstractMC
     supercell_matrix::Union{Nothing,Matrix{Int}}
     jphi_threshold::Float64
     enabled_bodies::Union{Nothing,Vector{Int}}
-    # `:tensor_template` (default) uses base-cell cluster templates with on-the-fly
-    # supercell index reconstruction (`_template_local_energy!`); SVector-specialized
-    # for N=2 / N=3 clusters. `:tensor` uses the fully-enumerated SALC tensor-contraction
-    # kernel via `_energy_from_instances_cached` / `_tensor_contract_instance_cached_changed!`.
+    # `:tensor_template` (default) uses primitive-cell un-fold templates with
+    # on-the-fly supercell index reconstruction (`_template_local_energy!` over a
+    # per-atom `UnfoldSAITable`). `:tensor` uses the fully-enumerated SALC tensor-
+    # contraction kernel via `_energy_from_instances_cached` /
+    # `_tensor_contract_instance_cached_changed!`.
     energy_kernel::Symbol
     # Populated only when `energy_kernel === :tensor_template`.
     local_template::Union{Nothing,LocalEnergyTemplate}

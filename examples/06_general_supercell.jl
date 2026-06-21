@@ -2,31 +2,31 @@
 #
 # General supercells via an integer matrix `supercell_matrix`.
 #
-# The default `:repeat = (n1, n2, n3)` tiles the XML *base cell* (the Magesty
-# training cell) by an integer diagonal. `:supercell_matrix` instead takes an
-# arbitrary 3×3 integer matrix in units of the *primitive* cell (recovered from
-# the XML translation table), so you can build:
+# `:repeat = (n1, n2, n3)` is sugar for `:supercell_matrix = reshape_base *
+# diag(n1, n2, n3)`: both build a supercell of the *primitive* cell (recovered
+# from the XML translation table) and run the same un-fold path. `:supercell_matrix`
+# additionally lets you pass an arbitrary 3×3 integer matrix, so you can build:
 #   * non-diagonal / sheared cells (commensurate spiral / AFM ordering vectors),
 #   * cells that are not integer multiples of the base cell,
 #   * down to a single primitive cell.
 # Clusters are placed by their relative vector (self-overlapping "face" pairs are
-# un-folded into distinct ±Δ neighbors). For the ground state this matches the
-# base-cell per-atom energy; for n>1 non-collinear configs it intentionally
-# differs from the folded diagonal `repeat` path (and is geometrically correct).
+# un-folded into distinct ±Δ neighbors). Since the base cell is itself a supercell
+# of the primitive cell, even `:repeat = (1,1,1)` un-folds into primitive cells.
 #
 #     julia --project=. examples/06_general_supercell.jl
 #
 # Notes
 # -----
-# * `:repeat` and `:supercell_matrix` are mutually exclusive.
-# * The two paths number atoms differently (`:repeat` is base-cell tile-major;
-#   `:supercell_matrix` is primitive cell-major). Energies agree; if you pass an
-#   explicit `:initial_spins` matrix or index atoms in `:extra_measure`, mind the
-#   numbering. Base-cell `:initial_spins` tiling is not available on the matrix
-#   path — use `:random` (default) or a full `3 × n_atoms` config.
+# * `:repeat` and `:supercell_matrix` are mutually exclusive, and the equivalent
+#   `:repeat` / `:supercell_matrix` give an identical Hamiltonian.
+# * Atoms are numbered primitive cell-major on both paths (no longer the old
+#   tile-major order). If you pass an explicit `:initial_spins` matrix or index
+#   atoms in `:extra_measure`, mind the numbering. Base-cell `:initial_spins`
+#   tiling is not available — use `:random` (default) or a full `3 × n_atoms`
+#   config.
 # * The optimized engine takes the same keyword: `JPhiSpinMC` /
-#   `load_sce_hamiltonian(xml; supercell_matrix = M)` (it runs the `:tensor`
-#   kernel for a general matrix; the diagonal `:repeat` keeps the fast template).
+#   `load_sce_hamiltonian(xml; supercell_matrix = M)`, and both the `:tensor` and
+#   `:tensor_template` kernels serve any matrix (un-fold).
 
 using LinearAlgebra: det
 using Random: MersenneTwister
@@ -58,7 +58,7 @@ end
 
 println("bcc_2x2x2 (base cell = 16 atoms; primitive cell = 1 atom):\n")
 
-# Diagonal base-cell tiling (legacy path).
+# Diagonal `repeat` (sugar for supercell_matrix = reshape_base * diag(n)).
 run_cell("repeat = (1,1,1)", Dict(:repeat => (1, 1, 1)))
 run_cell("repeat = (2,2,2)", Dict(:repeat => (2, 2, 2)))
 

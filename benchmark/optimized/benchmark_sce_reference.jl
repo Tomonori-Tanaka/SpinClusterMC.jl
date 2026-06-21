@@ -147,7 +147,7 @@ function main()
 
     println()
     println("Notes:")
-    println("  sce_energy  = coupled_cluster_energy reference path")
+    println("  sce_energy  = un-fold instance sum (_build_cluster_instances + _energy_from_instances)")
     println("  uncached    = _energy_from_instances (recomputes Ylm for every instance)")
     println("  cached      = _energy_from_instances_cached (Ylm computed once per call via")
     println("                _build_zlm_cache, then read from a table per instance —")

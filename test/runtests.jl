@@ -113,8 +113,8 @@ end
         end
 
         @testset "sce_energy reference vs fast" begin
-            # sce_energy uses coupled_cluster_energy (reference);
-            # _energy_from_instances uses _tensor_contract_instance (fast path).
+            # sce_energy sums the un-fold instance list via _energy_from_instances
+            # (_tensor_contract_instance); compare against the cached fast path.
             # They should agree on any spin configuration.
             rng = MersenneTwister(1)
             h = load_sce_hamiltonian(XML)

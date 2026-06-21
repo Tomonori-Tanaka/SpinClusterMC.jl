@@ -5,7 +5,7 @@
 # Measures the wall-clock cost of `SpinClusterHamiltonian(xml; repeat)`,
 # which internally does:
 #   1. parse_jphi_xml (XML -> SALCs, basis, JPhi map)
-#   2. _generate_instances (per-(SALC, translation, tile) ClusterInstance list)
+#   2. build_templates + _generate_instances_matrix (un-fold ClusterInstance list)
 #   3. build_cg_table (tesseral CG via Magesty.AngularMomentumCoupling)
 #
 # CLI options:

@@ -221,8 +221,8 @@ end
 # ---------------------------------------------------------------------------
 
 @testset "SCE energy: reference path agrees with fast path for repeat=(2,2,2)" begin
-    # Verifies coupled_cluster_energy (reference) and _energy_from_instances (fast path)
-    # give the same result for non-uniform spins after the cross-tile interaction fix.
+    # Verifies sce_energy (un-fold instance sum) and the cached fast path
+    # (_energy_from_instances) give the same result for non-uniform spins.
     h = load_sce_hamiltonian(XML_2x2x2; repeat = (2, 2, 2))
     rng = MersenneTwister(7)
     spins = let s = randn(rng, 3, h.n_atoms)
