@@ -10,6 +10,8 @@
 > `repeat` を `M = reshape_base·diag(repeat)` の糖衣として folded コードを撤去、
 > N=2/3 特殊化カーネルで sweep を高速化 (fege 1.90× / ferh 2.45×、bit-identical)。
 > **唯一の descoped**: キャッシュキー M 一本化 (P2-M4、churn のため見送り、下記)。
+> クローズ後レビューで掘り当てた `enabled_bodies` バグの修正は
+> [完了後フォローアップ](#完了後フォローアップ-post-close) を参照。
 
 ---
 
@@ -95,3 +97,31 @@
 - [x] `code-reviewer` / `numerical-reviewer`: P2-M3 (un-fold 統一) と N=2/3 高速パス
       (commit 1b4af0f) の両方をレビュー。いずれも重大 0、N=2/3 は bit-for-bit
       同一を独立確認。 (2026-06-21)
+
+## 完了後フォローアップ (post-close)
+
+クローズ後、パッケージ全体の客観レビュー (code-reviewer + numerical-reviewer)
+を実施。Phase 2 変更そのものは重大 0 で、un-fold の bit-identical 不変条件も
+独立ハーネスで再確認 (maxdiff = 0.0)。レビューが副次的に既存バグを 1 件発見し、
+合わせて修正した。
+
+- [x] FeRh テスト fixture を `isfile` ガード (通常 test に追加した N=3 ケースが
+      slow 階層 fixture を参照するため、`runtests.jl` の慣習に合わせる)。
+      commit `7fa33ae`。 (2026-06-21)
+- [x] **`enabled_bodies` バグ修正** (commit `311809c`)。`:tensor_template`
+      (デフォルト) カーネルが `params[:enabled_bodies]` を無視し全 body を寄与
+      させ、`:tensor` (フィルタ有) と silently に割れて **2 パス整合
+      (`:tensor_template ≡ :tensor`) を破っていた**。Phase 1 以前からの既存バグで
+      Phase 2 由来ではないが、un-fold 統一の文脈で同じ不変条件に属するため記録する。
+      修正は 3 箇所のフィルタ漏れを `:tensor` と一致させた:
+  - 寄与: `build_local_energy_template`/`_build_prim_cluster_templates` に
+    `enabled_bodies` kwarg を伝播し `N in enabled_bodies` でフィルタ。
+  - init ベースライン: `sce_energy(...; enabled_bodies)` kwarg を新設し、
+    `:tensor_template` の初期エネルギー seed をフィルタ (ΔE が一致しても baseline
+    が定数ずれするのを防ぐ)。
+  - エラー parity: constructor で `_parse_enabled_body_indices` を呼び未知 body
+    size / 空選択を `:tensor` 同様 `ArgumentError` 化。
+  - 回帰テスト: ferh 単一 primitive cell (N=2/3 混在) で bit-for-bit カーネル
+    一致・body-size additivity (`E([2])+E([3])=E(all)`)・serialize round-trip・
+    エラー parity を担保 (旧コードで確実に fail)。両レビュアー再レビューで重大 0。
+      (2026-06-21)
