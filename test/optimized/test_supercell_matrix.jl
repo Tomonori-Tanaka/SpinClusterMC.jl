@@ -96,8 +96,10 @@ end
         (BCC, [3 1 0; 0 1 0; 0 0 2]),
         (FEGE, [1 0 0; 0 1 0; 0 0 2]),
         (FEGE, [1 1 0; 0 2 0; 0 0 1]),
-        (FERH, [1 0 0; 0 1 0; 0 0 1]),     # N=3 clusters (single primitive cell)
     ]
+    # N=3 clusters (single primitive cell). FeRh is the slow-tier fixture, so
+    # include it only when present (mirrors the isfile guard in runtests.jl).
+    isfile(FERH) && push!(cases, (FERH, [1 0 0; 0 1 0; 0 0 1]))
     for (xml, M) in cases
         h = OPT.load_sce_hamiltonian(xml; supercell_matrix = M)
         templates, related = OPT._build_prim_cluster_templates(h)
@@ -141,8 +143,10 @@ end
         (BCC, [3 1 0; 0 1 0; 0 0 2]),
         (FEGE, [1 0 0; 0 1 0; 0 0 2]),
         (FEGE, [1 1 0; 0 2 0; 0 0 1]),
-        (FERH, [1 0 0; 0 1 0; 0 0 1]),     # N=3 fast path vs generic (self-overlap)
     ]
+    # N=3 fast path vs generic (self-overlap). FeRh is the slow-tier fixture, so
+    # include it only when present (mirrors the isfile guard in runtests.jl).
+    isfile(FERH) && push!(cases, (FERH, [1 0 0; 0 1 0; 0 0 1]))
     for (xml, M) in cases
         res = Dict{Symbol, Any}()
         for kern in (:tensor, :tensor_template)
