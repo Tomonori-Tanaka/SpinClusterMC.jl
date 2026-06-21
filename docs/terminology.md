@@ -33,28 +33,32 @@ jphi.xml で定義されるセル。コード中では `base_n_atoms` 個の原�
 （spiral/AFM 秩序ベクトル等）や、基本セルより小さい単一プリミティブセルまで
 扱える。
 
-- optimized 側は Phase 1 として **`:tensor` カーネルのみ**対応
-  （`supercell_matrix` 指定時は自動で `:tensor` を選択。高速 `:tensor_template`
-  は対角 `repeat` 専用で、`:tensor_template` + `supercell_matrix` はエラー）。
+- optimized 側は Phase 2 で **両カーネル**（`:tensor` リファレンス/キャッシュと
+  高速 `:tensor_template`）が一般 M に対応した（いずれも un-fold パス）。
+  `:tensor_template` がデフォルトで、`supercell_matrix` 指定でも使える
+  （Phase 1 の `:tensor_template` + `supercell_matrix` エラーは撤去済み）。
 
 - プリミティブセルは jphi.xml の並進対称性（`map_sym` / `n_trans`）から復元する
   （`base_lattice = primitive_lattice × reshape_base`、`|det(reshape_base)| =
   n_trans`、`n_prim = base_n_atoms / n_trans` 副格子）。
-- 原子数は `n_atoms = n_prim × |det(M)|`。原子番号はプリミティブ cell-major
-  （`subl + n_prim·(cell_id − 1)`）で、`repeat` パス（基本セル tile-major）とは
-  異なる。
+- 原子数は `n_atoms = n_prim × |det(M)|`。原子番号は **プリミティブ cell-major**
+  （`subl + n_prim·(cell_id − 1)`）。`repeat` パスもこの番号付けを共有する
+  （旧 tile-major は撤去）。
 - **クラスターは相対ベクトルで定義された幾何的対象**として配置される。基本セルで
   自己重なりする面上クラスター（半周期、`multiplicity ≥ 2`）は `multiplicity ÷
   s_base`（`s_base` = クラスターを自分に写す基本セル並進数）で**真の ±Δ 隣接に
   un-fold** される。
-  - **ferro / 基底状態では per-atom エネルギーが基本セルモデルと一致**するが、
-    **n>1・非共線配置では folded な対角 `repeat` パスと異なり、`supercell_matrix`
-    の方が幾何的に正しい**（`repeat` は基本セルの索引ペアを複製する有限サイズ
-    近似で、面上ペアを畳んだまま持ち越す）。Phase 2 で高速カーネルを un-fold 化
-    して `repeat` も統一予定。
+  - **`repeat` は `M = reshape_base · diag(n1,n2,n3)` の糖衣**で、`supercell_matrix`
+    と同じ un-fold パスを通る。等価な `repeat` / `supercell_matrix` は
+    **element-identical な Hamiltonian** を与える（基本セル自体が n_trans>1 の
+    primitive supercell なので、`repeat=(1,1,1)` でも primitive cell-major に
+    再番号付けされるが物理は不変）。面上ペアは常に幾何的に正しく un-fold される
+    （旧 `repeat` の「畳んだまま持ち越す」有限サイズ近似は撤去）。
 - `repeat` と `supercell_matrix` は排他（同時指定はエラー）。
 
-詳細は [`docs/specs/260620-general-supercell/`](specs/260620-general-supercell/)。
+詳細は [`docs/specs/260620-general-supercell/`](specs/260620-general-supercell/)、
+[`260620-optimized-general-supercell/`](specs/260620-optimized-general-supercell/)、
+[`260621-template-unfold/`](specs/260621-template-unfold/)。
 
 ---
 
@@ -124,8 +128,9 @@ SCE は `body` および `l_max` に上限を置かない。
 |---|---|
 | 基本セルの原子数 | `h.base_n_atoms` |
 | スーパーセルの原子数 | `h.n_atoms` |
-| タイリング数 | `h.repeat` |
-| 基本セルの並進対称性 | `h.map_sym`（`base_n_atoms × n_trans`） |
-| スーパーセル原子インデックス変換 | `supercell_atom_index(base_atom, ti, tj, tk, base_n_atoms, repeat)` |
-| クラスターインスタンスの列挙 | `_build_cluster_instances(h)` |
-| 並進の重複除去 | `_foreach_translated_instance(f, h, cbc)` |
+| スーパーセル行列（正準） | `h.supercell_matrix`（`repeat` も常にこの M に変換して保持） |
+| `repeat` 由来か（記録用） | `h.repeat`（直接 M 指定時は `(0,0,0)` センチネル） |
+| 復元したプリミティブセル | `h.prim::PrimitiveCell`（`reshape_base` / `n_prim` / `n_trans`） |
+| スーパーセル原子番号（cell-major） | `subl + n_prim·(cell_id − 1)` |
+| クラスターインスタンスの列挙 | `_build_cluster_instances(h)`（un-fold, 幾何的） |
+| 高速カーネルの per-atom テーブル | `_build_sai_table_cellmajor(...)` → `UnfoldSAITable` |

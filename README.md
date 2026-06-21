@@ -86,8 +86,8 @@ mpiexec -n <nprocs> julia example_job.jl run   # MPI (tasks run in parallel)
 | `thermalization` | `Int` | Equilibration sweeps (excluded from measurements) |
 | `binsize` | `Int` | Bin size for autocorrelation error estimation |
 | `spin_theta_max` | `Float64` or `nothing` | Geodesic proposal half-angle in radians; `nothing` → uniform random spin on full sphere |
-| `supercell` / `repeat` | `Tuple{Int,Int,Int}` | Diagonal tiling of the training cell `(n₁,n₂,n₃)` times |
-| `supercell_matrix` | `Matrix{Int}` (3×3) | General integer supercell of the primitive cell (non-diagonal / non-multiple cells). Mutually exclusive with `repeat`/`supercell`. The optimized engine runs the `:tensor` kernel for a general matrix. |
+| `supercell` / `repeat` | `Tuple{Int,Int,Int}` | Sugar for `supercell_matrix = reshape_base * diag(n₁,n₂,n₃)`; builds an `(n₁,n₂,n₃)` supercell of the primitive cell via the same un-fold path |
+| `supercell_matrix` | `Matrix{Int}` (3×3) | General integer supercell of the primitive cell (non-diagonal / non-multiple cells). Mutually exclusive with `repeat`/`supercell`. Both optimized kernels (`:tensor` and the default fast `:tensor_template`) handle a general matrix. |
 | `seed` | `Int` | Random seed |
 
 ### Temperature units

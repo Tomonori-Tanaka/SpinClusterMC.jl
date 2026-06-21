@@ -5,18 +5,28 @@
 完了時に `- [x]` + 完了日 (途中状態は触らない)。日々の作業は `TaskCreate`。
 各段階で `make test` を維持しながら進める。
 
+> **✅ Phase 2 完了・クローズ (2026-06-21)**。`main` にマージ済み
+> (`f4373b3..1b4af0f`)。`:tensor_template` 高速カーネルを一般 M に un-fold 対応し、
+> `repeat` を `M = reshape_base·diag(repeat)` の糖衣として folded コードを撤去、
+> N=2/3 特殊化カーネルで sweep を高速化 (fege 1.90× / ferh 2.45×、bit-identical)。
+> **唯一の descoped**: キャッシュキー M 一本化 (P2-M4、churn のため見送り、下記)。
+
+---
+
 ## P2-M1: template un-fold 構築 (sweep はまだ legacy)
 
-- [ ] `BaseClusterInstance{,2,3}` を primitive (pivot_subl/site_subl/site_delta)
-      ベースに作り直す (`src/template_energy.jl`)。
-- [ ] `build_local_energy_template` を `prim`+`M` 入力で構築
-      (`_cluster_offsets`/`_cluster_base_stabilizer`/`effective_mult`)。
-      `related{,2,3}_by_subl`、`LocalEnergyTemplate` に prim/M/cell_index 保持。
-- [ ] `_build_sai_table_n` を cell-major precompute に作り直す
-      (`_enumerate_cells`/`_wrap_offset_into_supercell`)。`_tile_coords`/
-      `supercell_atom_index` 依存を除去。
-- [ ] 単体: 構築した SAI が `_build_cluster_instances_matrix` の instance 集合と
-      整合 (同じ supercell 原子ペア)。
+> 実装で型/関数名が変わった: `BaseClusterInstance{,2,3}`→`PrimClusterTemplate`、
+> `_build_sai_table_n`→`_build_sai_table_cellmajor`+`UnfoldSAITable`、
+> `_build_cluster_instances_matrix`→`_build_cluster_instances`。
+
+- [x] cluster template を primitive (pivot_subl/site_subl/site_delta) ベースで構築
+      (`PrimClusterTemplate`, `src/template_energy.jl`)。 (2026-06-21)
+- [x] `build_local_energy_template` を `prim`+`M` 入力で構築
+      (`_cluster_offsets`/`_cluster_base_stabilizer`/`eff_mult`)。 (2026-06-21)
+- [x] per-atom cell-major precompute (`_build_sai_table_cellmajor`→`UnfoldSAITable`)。
+      `_tile_coords`/`supercell_atom_index` 依存を除去。 (2026-06-21)
+- [x] 単体: 構築した SAI が `_build_cluster_instances` の instance 集合と整合
+      (test_supercell_matrix.jl "primitive cell-major template SAI ...")。 (2026-06-21)
 
 ## P2-M2: sweep + 2 パス整合
 
@@ -26,9 +36,9 @@
       書き換え (N=2/3 fast `_contract_n{2,3}_unfold_changed`, N≥4 generic
       fallback)。同一プロセス A/B で fege 1.90× / ferh 2.45×、bit-identical。
       (2026-06-21)
-- [ ] `:tensor_template` と `:tensor` が一般 M・random 配置で **総エネルギー一致**
-      (init! 初期化 + sweep! ΔE 両方)。
-- [ ] `:tensor_template`+`supercell_matrix` のエラー (Phase 1) を解除。
+- [x] `:tensor_template` と `:tensor` が一般 M・random 配置で **総エネルギー一致**
+      (init! + sweep! ΔE、bit-for-bit トラジェクトリ一致まで検証)。 (2026-06-21)
+- [x] `:tensor_template`+`supercell_matrix` のエラー (Phase 1) を解除。 (2026-06-21)
 
 ## P2-M3: `repeat` un-fold 統一 + folded 撤去
 
@@ -53,29 +63,35 @@
 
 > 依存: P2-M3。
 
-- [ ] `init_spins`/`_tile_base_spins!` を open decision 2 に従い対応
-      (推奨: base-cell タイリング廃止 → random or full config)。
-- [ ] キャッシュキーを M ベースに一本化、`register_evaluables`/serialize 整理。
-- [ ] MPI serialize round-trip (repeat 由来 M / 直接 M 両方)。
+- [x] `init_spins`/`_tile_base_spins!`: base-cell タイリング廃止 → random or
+      full `3×n_atoms` config のみ受理 (`_tile_base_spins!` 撤去)。 (2026-06-21)
+- [~] キャッシュキーを M ベースに一本化 → **見送り (descoped)**。repeat→M 変換に
+      `extract_primitive` (XML パース) が要り、キャッシュ参照の前に走らせる必要が
+      ある churn。現 dual-key `(xml, repeat, scm_key, thr)` は正しく安価で、同一
+      スーパーセルを repeat と supercell_matrix の両方で指定する実運用ケースが無い
+      ため利得が無い。`register_evaluables`/serialize は dual-key のまま整合。
+- [x] MPI serialize round-trip (repeat 由来 M / 直接 M 両方、両カーネル)。 (2026-06-21)
 
 ## P2-M5: テスト全更新
 
 > 依存: P2-M2〜M4。
 
-- [ ] 既存 repeat>1 テスト (bcc (2,2,2) 等) を un-fold 期待値に更新。
-- [ ] tile-major 前提テストを cell-major に書き換えるか撤去
-      (`test/bcc_2x2x2`: "initial_spins tiling" / "cross-tile",
-      `test/simple/test_simple_spin_proposal.jl`: Matrix tiling)。
-- [ ] `supercell_atom_index`/folded 関数の直接テストを撤去。
-- [ ] parity に `:tensor_template`×M を追加。"intended divergence" テスト撤去。
-- [ ] `make test` / `make test-slow` 全 pass、JET pass。
+- [x] 既存 repeat>1 テスト (bcc (2,2,2) 等) を un-fold 期待値に更新。 (2026-06-21)
+- [x] tile-major 前提テストを cell-major / full-config に書き換え・撤去。 (2026-06-21)
+- [x] `supercell_atom_index`/folded 関数の直接テストを撤去。 (2026-06-21)
+- [x] parity に `:tensor_template`×M を追加。"intended divergence" テスト撤去。
+      N=3 担保に ferh 単一 primitive cell ケースを通常テストへ追加。 (2026-06-21)
+- [x] `make test` + JET pass。 (2026-06-21)
+- [x] `make test-slow` 全 pass (N=2/3 カーネル変更後の再確認: ferh_4x4x4
+      delta energy consistency + Simple↔optimized parity)。 (2026-06-21)
 
 ## P2-M6: docs + レビュー
 
-- [ ] `repeat` が un-fold 糖衣・folded 廃止を docstring/terminology/README に反映。
-      `design_notes.md` の Phase 2 future-work を「完了」に。[x] design_notes 反映済
-      (N=2/3 高速パス + ベンチ含む, 2026-06-21)。
-- [ ] `JuliaFormatter` (src/simple, 共有, test/simple, test/parity)。
+- [x] `repeat` が un-fold 糖衣・folded 廃止を docstring/terminology/README/
+      design_notes に反映 (N=2/3 高速パス + ベンチ含む)。 (2026-06-21)
+- [x] `JuliaFormatter` (src/simple, 共有, test/simple, test/parity) 整形済み確認。
       `template_energy.jl`/`JPhiMagestyCarlo.jl` は既存スタイル維持で整形対象外
-      (CLAUDE.md)。
-- [ ] `code-reviewer` / `numerical-reviewer`。
+      (CLAUDE.md)。 (2026-06-21)
+- [x] `code-reviewer` / `numerical-reviewer`: P2-M3 (un-fold 統一) と N=2/3 高速パス
+      (commit 1b4af0f) の両方をレビュー。いずれも重大 0、N=2/3 は bit-for-bit
+      同一を独立確認。 (2026-06-21)
