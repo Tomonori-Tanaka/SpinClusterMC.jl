@@ -602,15 +602,24 @@ package is used for MC sampling where only ΔE matters.
 `spin_directions` should be `3 × h.n_atoms`: rows 1–3 are `x`, `y`, `z` of the
 spin direction; columns are supercell atoms (`a` → column `a`).
 
+`enabled_bodies` (a list of body sizes, or `nothing` for all) restricts the sum
+to the listed cluster body sizes, matching the `:tensor` / `:tensor_template`
+kernels' body filter.
+
 This is a reference/validation entry point — it rebuilds the instance list on
 each call (the MC hot path uses the prebuilt `LocalEnergyCache` /
 `LocalEnergyTemplate`), so the per-call rebuild is acceptable.
 """
 function sce_energy(
     h::SCEHamiltonian,
-    spin_directions::Union{AbstractMatrix{<:Real},AbstractVector{<:SVector{3,<:Real}}},
+    spin_directions::Union{AbstractMatrix{<:Real},AbstractVector{<:SVector{3,<:Real}}};
+    enabled_bodies::Union{Nothing,Vector{Int}}=nothing,
 )::Float64
-    return _energy_from_instances(_build_cluster_instances(h), spin_directions)
+    instances = _build_cluster_instances(h)
+    if enabled_bodies !== nothing
+        instances = filter(inst -> length(inst.atoms) in enabled_bodies, instances)
+    end
+    return _energy_from_instances(instances, spin_directions)
 end
 
 include("template_energy.jl")
@@ -842,6 +851,13 @@ function JPhiSpinMC(params::AbstractDict)
                 load_sce_hamiltonian(xml; repeat = rep, jphi_threshold = thr) :
                 load_sce_hamiltonian(xml; supercell_matrix = scm, jphi_threshold = thr)
         end
+        # Validate enabled_bodies against the full body set so the
+        # :tensor_template kernel rejects unknown/empty selections exactly like
+        # the :tensor kernel (_parse_enabled_body_indices); the returned indices
+        # are unused by this kernel (the sweep walks the template SAI table), so
+        # only the validating throw matters here.
+        _, _, full_body_list = _salc_max_l_max_sites_bodies(ham, nothing)
+        _parse_enabled_body_indices(params, full_body_list)
         max_l, max_sites, body_list = _salc_max_l_max_sites_bodies(ham, enabled_bodies)
         active_body_indices = collect(eachindex(body_list))
         n = ham.n_atoms
@@ -860,7 +876,10 @@ function JPhiSpinMC(params::AbstractDict)
         cart_idx_buf    = Vector{Int}(undef, max(max_sites, 1))
         # Build the template eagerly so mc is usable without Carlo.init!
         # (e.g. tests that set spins/energy manually and call sweep! directly).
-        local_template = build_local_energy_template(ham)
+        # Pass enabled_bodies so the template kernel filters body sizes exactly
+        # like the :tensor kernel (otherwise disabled bodies would still
+        # contribute, diverging from :tensor).
+        local_template = build_local_energy_template(ham; enabled_bodies)
         atoms_buf = Vector{Int}(undef, max(max_sites, 1))
         return JPhiSpinMC(
             T, ham, [zero(SVector{3,Float64}) for _ in 1:n], 0.0,
@@ -1262,8 +1281,9 @@ function Carlo.init!(mc::JPhiSpinMC, ctx::MCContext, params::AbstractDict)
     if mc.energy_kernel === :tensor_template
         # local_template was already built eagerly in the constructor; recompute the
         # initial energy here in case the test harness or restart path mutated mc.spins
-        # after construction.
-        mc.energy = sce_energy(mc.ham, mc.spins)
+        # after construction. Filter by enabled_bodies so the baseline matches the
+        # :tensor kernel (and the body-filtered template) instead of the full energy.
+        mc.energy = sce_energy(mc.ham, mc.spins; enabled_bodies=mc.enabled_bodies)
     else
         mc.energy = _energy_from_instances_cached(
             mc.local_cache.instances[mc.active_instance_indices],
@@ -1449,7 +1469,7 @@ function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{<
     spin_theta_max = Serialization.deserialize(s)
     renorm_every = Serialization.deserialize(s)::Int
     sweep_count  = Serialization.deserialize(s)::Int
-    enabled_bodies = Serialization.deserialize(s)
+    enabled_bodies = Serialization.deserialize(s)::Union{Nothing,Vector{Int}}
     energy_kernel = Serialization.deserialize(s)::Symbol
 
     # Use the process-local cache (populated at startup via _mpi_build_ham_and_cache).
@@ -1464,7 +1484,7 @@ function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{<
     zlm_row_buf = Vector{Float64}(undef, (derived.max_l + 1)^2)
     sph = SphericalHarmonics(derived.max_l)
     local_template, atoms_buf = if energy_kernel === :tensor_template
-        tpl = build_local_energy_template(ham)
+        tpl = build_local_energy_template(ham; enabled_bodies)
         (tpl, Vector{Int}(undef, max(derived.max_sites, 1)))
     else
         (nothing, Int[])

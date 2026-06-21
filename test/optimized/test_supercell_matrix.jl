@@ -172,6 +172,93 @@ end
     end
 end
 
+@testset "enabled_bodies filters body sizes identically in both kernels" begin
+    # Regression: the :tensor_template kernel used to ignore params[:enabled_bodies]
+    # and silently sum all body sizes, diverging from :tensor (which filters). FeRh
+    # has mixed N=2/N=3 SALCs; a single primitive cell (M = I, 2 atoms) exercises
+    # both. With identical seed the spin stream is independent of kernel/filter, so
+    # bit-for-bit ΔE makes the whole trajectory (init energy + spins) identical.
+    if isfile(FERH)
+        M = [1 0 0; 0 1 0; 0 0 1]
+        function run_kernel(kern, eb)
+            p = Dict{Symbol, Any}(
+                :xml_path => FERH, :T => 0.08, :supercell_matrix => M,
+                :thermalization => 0, :binsize => 1, :seed => 7,
+                :energy_kernel => kern)
+            eb === nothing || (p[:enabled_bodies] = eb)
+            mc = OPT.JPhiSpinMC(p)
+            ctx = Carlo.MCContext{MersenneTwister}(p)
+            Carlo.init!(mc, ctx, p)
+            e0 = mc.energy
+            for _ in 1:50
+                Carlo.sweep!(mc, ctx)
+            end
+            (e0, mc.energy, copy(mc.spins))
+        end
+
+        # Pairs only (N=2): both kernels agree bit-for-bit over the trajectory.
+        e0t2, eft2, st2 = run_kernel(:tensor, [2])
+        e0p2, efp2, sp2 = run_kernel(:tensor_template, [2])
+        @test isapprox(e0t2, e0p2; atol = 1.0e-9, rtol = 1.0e-9)
+        @test isapprox(eft2, efp2; atol = 1.0e-9, rtol = 1.0e-9)
+        @test maximum(norm(st2[i] - sp2[i]) for i in eachindex(st2)) < 1.0e-10
+
+        # Triplets only (N=3): also bit-for-bit across kernels.
+        e0t3, eft3, _ = run_kernel(:tensor, [3])
+        e0p3, efp3, _ = run_kernel(:tensor_template, [3])
+        @test isapprox(e0t3, e0p3; atol = 1.0e-9, rtol = 1.0e-9)
+        @test isapprox(eft3, efp3; atol = 1.0e-9, rtol = 1.0e-9)
+
+        # The filter must actually drop contributions: with identical initial
+        # spins, pairs-only + triplets-only init energy sums to the full energy
+        # (additive over disjoint body sizes), and neither equals the full energy.
+        e0p_all, _, _ = run_kernel(:tensor_template, nothing)
+        @test isapprox(e0p2 + e0p3, e0p_all; atol = 1.0e-9, rtol = 1.0e-9)
+        @test !isapprox(e0p2, e0p_all; atol = 1.0e-6)
+        @test !isapprox(e0p3, e0p_all; atol = 1.0e-6)
+
+        # Serialize round-trip must preserve the body filter: deserialize rebuilds
+        # the template via build_local_energy_template(...; enabled_bodies), so the
+        # restored energy must equal the pairs-only reference, not the full energy.
+        let p = Dict{Symbol, Any}(
+                :xml_path => FERH, :T => 0.08, :supercell_matrix => M,
+                :sweeps => 5, :thermalization => 0, :binsize => 1, :seed => 7,
+                :energy_kernel => :tensor_template, :enabled_bodies => [2])
+            mc = OPT.JPhiSpinMC(p)
+            ctx = Carlo.MCContext{MersenneTwister}(p)
+            Carlo.init!(mc, ctx, p)
+            io = IOBuffer()
+            Serialization.serialize(io, mc)
+            seekstart(io)
+            mc2 = Serialization.deserialize(io)
+            @test mc2.enabled_bodies == [2]
+            @test isapprox(mc2.energy, mc.energy; atol = 1.0e-10)
+            @test isapprox(
+                mc2.energy, OPT.sce_energy(mc2.ham, mc2.spins; enabled_bodies = [2]);
+                atol = 1.0e-9, rtol = 1.0e-9)
+            @test !isapprox(mc2.energy, OPT.sce_energy(mc2.ham, mc2.spins); atol = 1.0e-6)
+            # Continued sweeps stay consistent with the filtered reference (the
+            # rebuilt template's ΔE respects the filter).
+            for _ in 1:5
+                Carlo.sweep!(mc2, ctx)
+            end
+            @test isapprox(
+                mc2.energy, OPT.sce_energy(mc2.ham, mc2.spins; enabled_bodies = [2]);
+                atol = 1.0e-6, rtol = 1.0e-6)
+        end
+
+        # Error parity: an unknown body size errors on BOTH kernels (the template
+        # kernel must validate just like the :tensor kernel does).
+        for kern in (:tensor, :tensor_template)
+            pbad = Dict{Symbol, Any}(
+                :xml_path => FERH, :T => 0.08, :supercell_matrix => M,
+                :thermalization => 0, :binsize => 1, :seed => 7,
+                :energy_kernel => kern, :enabled_bodies => [99])
+            @test_throws ArgumentError OPT.JPhiSpinMC(pbad)
+        end
+    end
+end
+
 @testset "JPhiSpinMC supercell_matrix serialize round-trip" begin
     # Round-trip both kernels on the un-fold matrix path (deserialize rebuilds
     # the un-fold template for :tensor_template via build_local_energy_template).

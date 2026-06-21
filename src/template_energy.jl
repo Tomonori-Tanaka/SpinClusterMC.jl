@@ -57,9 +57,16 @@ on the un-fold (general supercell matrix M) path: primitive-cell templates
 instance table (`_build_sai_table_cellmajor`). `repeat` is sugar for
 `M = reshape_base * diag(repeat)`, so this single builder serves every case
 (`h.supercell_matrix` is always set; see `load_sce_hamiltonian`).
+
+`enabled_bodies` (a list of body sizes, or `nothing` for all) restricts which
+cluster body sizes contribute, mirroring the `:tensor` kernel's body filter so
+the two kernels agree when `params[:enabled_bodies]` is set.
 """
-function build_local_energy_template(h::SCEHamiltonian)::LocalEnergyTemplate
-    templates, related_by_subl = _build_prim_cluster_templates(h)
+function build_local_energy_template(
+    h::SCEHamiltonian;
+    enabled_bodies::Union{Nothing, Vector{Int}}=nothing,
+)::LocalEnergyTemplate
+    templates, related_by_subl = _build_prim_cluster_templates(h; enabled_bodies)
     unfold = _build_sai_table_cellmajor(templates, related_by_subl, h)
     return LocalEnergyTemplate(templates, unfold)
 end
@@ -78,8 +85,15 @@ clusters that touch it (at any participating site).
 The geometry mirrors `_build_cluster_instances`: `_cluster_offsets` for
 the pivot-relative sublattice offsets and `eff_mult = multiplicity ÷ s_base` for
 the un-folded prefactor. Placement onto `M` is done by the SAI table builder.
+
+`enabled_bodies` (a list of body sizes, or `nothing` for all) skips any coupled
+basis whose body size `N` is not selected, matching the `:tensor` filter in
+`_salc_max_l_max_sites_bodies`.
 """
-function _build_prim_cluster_templates(h::SCEHamiltonian)
+function _build_prim_cluster_templates(
+    h::SCEHamiltonian;
+    enabled_bodies::Union{Nothing, Vector{Int}}=nothing,
+)
     prim = h.prim::PrimitiveCell
     n_prim = prim.n_prim
     map_sym = h.map_sym
@@ -93,6 +107,7 @@ function _build_prim_cluster_templates(h::SCEHamiltonian)
         js = h.jphi[s]
         for cbc in group
             N = length(cbc.atoms)
+            enabled_bodies === nothing || N in enabled_bodies || continue
             scaling = _cluster_scaling(N)
             inst_dims = [2 * l + 1 for l in cbc.ls]
             inst_strides = _compute_instance_strides(cbc.ls)
