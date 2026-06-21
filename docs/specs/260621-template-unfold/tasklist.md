@@ -32,17 +32,20 @@
 
 > 依存: P2-M2。
 
-- [ ] `load_sce_hamiltonian`/`Simple.SpinClusterHamiltonian`: `repeat` を
-      `M = reshape_base*diag(repeat)` に変換し un-fold パスへ合流。
-- [ ] folded コード撤去 (open decision 1 で確定した範囲):
+- [x] `load_sce_hamiltonian`/`Simple.SpinClusterHamiltonian`: `repeat` を
+      `M = reshape_base*diag(repeat)` に変換し un-fold パスへ合流。 (2026-06-21)
+- [x] folded コード撤去 (open decision 1 で確定した範囲):
       `supercell_atom_index`/`_foreach_translated_instance`/
       `coupled_cluster_energy`/folded geometry/Simple `_generate_instances`/
-      `_tile_coords`/`_foreach_base_instance`/`_tile_base_matrix`。
-- [ ] `sce_energy` の `repeat`/`coupled_cluster_energy` 分岐を撤去し、M 変換後は
-      常に `_build_cluster_instances(h)` (instance 総和) パスのみにする。
-- [ ] 原子番号付けが tile-major → cell-major に変わる (破壊的)。`mc.spins` の
-      列順に依存するテスト・docstring・serialize を要確認 (design §3)。
-- [ ] `repeat` == `supercell_matrix` 等価を確認。`repeat=(1,1,1)` 不変。
+      `_tile_coords`/`_foreach_base_instance`/`_tile_base_matrix`。 (2026-06-21)
+- [x] `sce_energy` の `repeat`/`coupled_cluster_energy` 分岐を撤去し、M 変換後は
+      常に `_build_cluster_instances(h)` (instance 総和) パスのみにする。 (2026-06-21)
+- [x] 原子番号付けが tile-major → cell-major に変わる (破壊的)。`mc.spins` の
+      列順に依存するテスト・docstring・serialize を確認・更新。base cell 自体が
+      primitive supercell (n_trans>1) のため `repeat=(1,1,1)` でも再番号付け
+      されるが物理は不変 (requirements 訂正済み)。 (2026-06-21)
+- [x] `repeat` == `supercell_matrix` 等価を確認。`repeat=(1,1,1)` 物理不変。
+      (2026-06-21)
 
 ## P2-M4: init_spins / cache / MPI
 
