@@ -100,22 +100,9 @@ end
     @test all(spins[3, :] .≈ 1.0)
 end
 
-@testset "Simple.init_spins with Matrix (base or supercell)" begin
-    # 3 × base path: tile across the supercell.
-    base = [1.0 0.0; 0.0 0.0; 0.0 2.0]   # second column is (0, 0, 2) → normalizes to ẑ
-    spins = SIMPLE.init_spins(base, 6, 2)
-    @test size(spins) == (3, 6)
-    # Even atoms (ib = 2) get ẑ; odd atoms (ib = 1) get x̂.
-    for ia in 1:6
-        ib = ((ia - 1) % 2) + 1
-        if ib == 1
-            @test spins[:, ia] ≈ [1.0, 0.0, 0.0]
-        else
-            @test spins[:, ia] ≈ [0.0, 0.0, 1.0]
-        end
-    end
-
-    # 3 × n_atoms path: use as-is (after column normalization).
+@testset "Simple.init_spins with Matrix (full supercell config)" begin
+    # Phase 2: only a full 3 × n_atoms config is accepted (primitive cell-major
+    # order); base-cell tiling (3 × base_n replicated) is no longer supported.
     super = [1.0 0.0 0.5 -0.5; 0.0 1.0 0.5 -0.5; 0.0 0.0 sqrt(0.5) -sqrt(0.5)]
     n_atoms = 4
     spins = SIMPLE.init_spins(super, n_atoms, 2)
@@ -123,6 +110,9 @@ end
     for i in 1:n_atoms
         @test norm(spins[:, i]) ≈ 1.0 rtol = 1.0e-12
     end
+    # A base-cell-sized matrix (ncols = base_n ≠ n_atoms) is rejected.
+    base = [1.0 0.0; 0.0 0.0; 0.0 2.0]
+    @test_throws ArgumentError SIMPLE.init_spins(base, 6, 2)
 end
 
 @testset "Simple.init_spins(::AbstractDict) reads :initial_spins" begin

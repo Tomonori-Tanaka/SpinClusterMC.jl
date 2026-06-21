@@ -306,17 +306,10 @@ function Carlo.init!(mc::SCEMC, ctx::Carlo.MCContext, params::AbstractDict)
     n_atoms = mc.h.n_atoms
     base_n_atoms = mc.h.base_n_atoms
     spec = get(params, :initial_spins, :random)
-    # The general supercell_matrix path numbers atoms primitive cell-major, so a
-    # base-cell-sized initial_spins pattern cannot be tiled (the `% base_n_atoms`
-    # mapping would scramble sublattices). Require :random or a full config.
-    if mc.supercell_matrix !== nothing && spec isa AbstractMatrix &&
-       size(spec, 2) == base_n_atoms && base_n_atoms != n_atoms
-        throw(ArgumentError(
-            "initial_spins base-cell tiling (size $(size(spec))) is not " *
-            "supported with supercell_matrix; provide a full 3×$n_atoms " *
-            "configuration or use :random"
-        ))
-    end
+    # Phase 2: every path numbers atoms primitive cell-major, so a base-cell-sized
+    # initial_spins pattern can no longer be tiled. `init_spins` enforces this
+    # (a 3×base_n matrix is rejected unless it is already the full config), so no
+    # separate guard is needed here. Use :random or a full 3×n_atoms config.
     initial = init_spins(spec, n_atoms, base_n_atoms; rng = ctx.rng)
     @inbounds for i in 1:n_atoms
         mc.spins[1, i] = initial[1, i]

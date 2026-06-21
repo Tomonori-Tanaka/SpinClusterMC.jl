@@ -28,7 +28,8 @@ using Magesty.XMLIO: read_salcbasis_from_xml
 using SpheriCart: SphericalHarmonics, compute, compute!
 using ..SupercellCommon: PrimitiveCell, extract_primitive, _int_det3, _adjugate3,
                          _wrap_offset_into_supercell, _enumerate_cells,
-                         _cluster_base_stabilizer, _cluster_offsets
+                         _cluster_base_stabilizer, _cluster_offsets,
+                         _supercell_from_repeat
 
 export SCEHamiltonian,
     load_sce_hamiltonian,
@@ -307,46 +308,42 @@ function load_sce_hamiltonian(
     end
 
     n0 = sys.n_atoms
-    if supercell_matrix === nothing
-        # ---- Legacy diagonal `repeat` path (unchanged) ----
-        lat_s, pos_s = _build_supercell_geometry(sys.lattice, sys.pos_frac, n0, repeat)
-        n_super = n0 * repeat[1] * repeat[2] * repeat[3]
-        return SCEHamiltonian(
-            n_super,
-            n0,
-            repeat,
-            lat_s,
-            pos_s,
-            salc_list,
-            jphi,
-            sys.map_sym,
-            sys.n_trans,
-            nothing,
-            nothing,
-        )
-    end
-    # ---- General supercell-matrix path (primitive cell-major, un-fold) ----
-    repeat == (1, 1, 1) ||
-        throw(ArgumentError("specify either repeat or supercell_matrix, not both"))
-    size(supercell_matrix) == (3, 3) ||
-        throw(ArgumentError("supercell_matrix must be 3×3, got $(size(supercell_matrix))"))
-    M = SMatrix{3, 3, Int}(supercell_matrix)
-    _int_det3(M) != 0 ||
-        throw(ArgumentError("supercell_matrix is singular (det = 0)"))
+    # Unified un-fold path: both `repeat` and `supercell_matrix` are expressed as
+    # an integer supercell matrix M (primitive-cell units) and tiled by the shared
+    # `SupercellCommon` geometry. `repeat = (n1, n2, n3)` is the sugar
+    # `M = reshape_base * diag(n)` (Phase 2); the base cell is itself a supercell
+    # of the primitive cell, so even `repeat = (1, 1, 1)` un-folds into `n_trans`
+    # primitive cells with cell-major atom numbering. The physical energy is
+    # unchanged (folded ≡ un-fold at the base cell); only the atom index → atom
+    # map differs from the historical tile-major numbering.
     prim = extract_primitive(sys.lattice, sys.pos_frac, sys.map_sym, sys.n_trans)
+    if supercell_matrix === nothing
+        M = _supercell_from_repeat(prim.reshape_base, repeat)
+        rep_record = repeat
+    else
+        repeat == (1, 1, 1) ||
+            throw(ArgumentError("specify either repeat or supercell_matrix, not both"))
+        size(supercell_matrix) == (3, 3) ||
+            throw(ArgumentError("supercell_matrix must be 3×3, got $(size(supercell_matrix))"))
+        M = SMatrix{3, 3, Int}(supercell_matrix)
+        _int_det3(M) != 0 ||
+            throw(ArgumentError("supercell_matrix is singular (det = 0)"))
+        # `(0, 0, 0)` sentinel marks a directly-specified matrix (no repeat sugar).
+        rep_record = (0, 0, 0)
+    end
     lat_s, pos_s = _build_supercell_geometry_matrix(prim, M)
     n_super = prim.n_prim * abs(_int_det3(M))
     return SCEHamiltonian(
         n_super,
         n0,
-        (0, 0, 0),
+        rep_record,
         lat_s,
         pos_s,
         salc_list,
         jphi,
         sys.map_sym,
         sys.n_trans,
-        Matrix{Int}(supercell_matrix),
+        Matrix{Int}(M),
         prim,
     )
 end
@@ -1535,18 +1532,13 @@ Initialize the spin configuration and internal caches before the first sweep.
 
 **Spin initialization** (controlled by `params[:initial_spins]`):
 
-- **With `:initial_spins`** — expects a `3 × base_n_atoms` matrix whose columns
-  are spin vectors for the base cell (`repeat = (1,1,1)` in the XML).
-  The configuration is tiled periodically over the full supercell via
-  [`_tile_base_spins!`](@ref): supercell atom `ia` is assigned the spin of base
-  atom `((ia-1) % base_n_atoms) + 1`.  Each column is renormalized to a unit
-  vector; a zero-norm column raises `ArgumentError`.
-
-  ```julia
-  # Ferromagnetic +z start for a 16-atom base cell
-  s0 = zeros(3, 16); s0[3, :] .= 1.0
-  params[:initial_spins] = s0
-  ```
+- **With `:initial_spins`** — expects a full `3 × n_atoms` matrix whose columns
+  are the spin vectors for every supercell atom, in the supercell's own
+  (primitive cell-major) atom order. Each column is renormalized to a unit
+  vector; a zero-norm column raises `ArgumentError`. Base-cell tiling (a
+  `3 × base_n_atoms` pattern replicated over the cell) is no longer supported:
+  the un-fold numbering is primitive cell-major, so a base-cell pattern can no
+  longer be tiled meaningfully (Phase 2). Use `:random` or a full config.
 
 - **Without `:initial_spins`** — all spins are drawn independently and uniformly
   on the unit sphere using the seeded RNG in `ctx`.
@@ -1557,11 +1549,17 @@ stored energy are rebuilt consistently.
 function Carlo.init!(mc::JPhiSpinMC, ctx::MCContext, params::AbstractDict)
     n = mc.ham.n_atoms
     if haskey(params, :initial_spins)
-        mc.supercell_matrix === nothing || throw(ArgumentError(
-            "initial_spins (base-cell tiling) is not supported with " *
-            "supercell_matrix (atom numbering is primitive cell-major); use " *
-            "random initialization"))
-        _tile_base_spins!(mc.spins, params[:initial_spins], mc.ham.base_n_atoms)
+        s0 = params[:initial_spins]
+        s0 isa AbstractMatrix && size(s0) == (3, n) || throw(ArgumentError(
+            "initial_spins must be a full 3 × n_atoms ($n) matrix in primitive " *
+            "cell-major order; base-cell tiling is unavailable on the un-fold " *
+            "path (use :random or a full config). Got $(summary(s0))"))
+        @inbounds for i in 1:n
+            x, y, z = Float64(s0[1, i]), Float64(s0[2, i]), Float64(s0[3, i])
+            nrm = sqrt(x * x + y * y + z * z)
+            nrm > 0 || throw(ArgumentError("initial_spins column $i has zero norm"))
+            mc.spins[i] = SVector(x / nrm, y / nrm, z / nrm)
+        end
     else
         for i in 1:n
             sx, sy, sz = _rand_unit_spin(ctx.rng)

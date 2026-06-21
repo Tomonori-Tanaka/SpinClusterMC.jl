@@ -375,43 +375,21 @@ function SpinClusterHamiltonian(
     data = parse_jphi_xml(xml_path)
     base_n = data.system.n_atoms
 
+    # Unified un-fold path: both `repeat` and `supercell_matrix` reduce to an
+    # integer supercell matrix M (primitive-cell units). `repeat = (n1, n2, n3)`
+    # is the sugar `M = reshape_base * diag(n)` (Phase 2). The base cell is itself
+    # a supercell of the primitive cell, so even `repeat = (1, 1, 1)` un-folds
+    # into `n_trans` primitive cells with cell-major atom numbering; the physical
+    # energy is unchanged (folded ≡ un-fold at the base cell), only the atom index
+    # → atom map differs from the historical tile-major numbering.
+    prim = extract_primitive(data.system)
     if supercell_matrix === nothing
-        # ---- Legacy path: diagonal `repeat` of the base cell ----
-        # Unchanged from the pre-supercell_matrix implementation, so existing
-        # behavior / tests / PT serialization stay bit-for-bit identical.
         all(>(0), repeat) || throw(
             ArgumentError("repeat factors must be positive integers, got $repeat")
         )
-        n1, n2, n3 = repeat
-        n_super = base_n * n1 * n2 * n3
-        # Short-circuit when thr == 0.0 so the code path matches exactly.
-        if thr > 0
-            n_total = length(data.jphi)
-            n_kept = count(j -> abs(j) ≥ thr, data.jphi)
-            n_dropped = n_total - n_kept
-            if n_kept == 0
-                max_abs = n_total == 0 ? 0.0 : maximum(abs, data.jphi)
-                throw(ArgumentError(
-                    "jphi_threshold=$thr eV filters out all $n_total SALCs " *
-                    "(max |J|=$max_abs eV); Hamiltonian would be empty"
-                ))
-            end
-            if n_dropped > 0
-                max_dropped = maximum(
-                    abs(j) for j in data.jphi if abs(j) < thr; init = 0.0
-                )
-                @debug "Dropped $n_dropped / $n_total SALCs below " *
-                       "jphi_threshold=$thr eV (max dropped |J|=$max_dropped eV)"
-            end
-        end
-        instances = _generate_instances(
-            data.salcs, data.jphi, data.system.map_sym, data.system.pos_frac,
-            base_n, repeat; jphi_threshold = thr
-        )
+        M = _supercell_from_repeat(prim.reshape_base, repeat)
         repeat_field = repeat
-        n_atoms = n_super
     else
-        # ---- General path: arbitrary integer supercell matrix M ----
         repeat == (1, 1, 1) || throw(ArgumentError(
             "specify either repeat or supercell_matrix, not both"
         ))
@@ -421,19 +399,17 @@ function SpinClusterHamiltonian(
         M = SMatrix{3, 3, Int}(supercell_matrix)
         _int_det3(M) != 0 ||
             throw(ArgumentError("supercell_matrix is singular (det = 0)"))
-        prim = extract_primitive(data.system)
-        templates = build_templates(
-            data.salcs, data.jphi, data.system, prim; jphi_threshold = thr
-        )
-        isempty(templates) && throw(ArgumentError(
-            "jphi_threshold=$thr eV filters out all SALCs; Hamiltonian " *
-            "would be empty"
-        ))
-        instances, n_atoms = _generate_instances_matrix(templates, prim, M)
-        # `repeat` is meaningless for a general matrix; use a sentinel so the
-        # struct is unchanged and consumers can detect the matrix path.
+        # `(0, 0, 0)` sentinel marks a directly-specified matrix (no repeat sugar).
         repeat_field = (0, 0, 0)
     end
+    templates = build_templates(
+        data.salcs, data.jphi, data.system, prim; jphi_threshold = thr
+    )
+    isempty(templates) && throw(ArgumentError(
+        "jphi_threshold=$thr eV filters out all SALCs; Hamiltonian " *
+        "would be empty"
+    ))
+    instances, n_atoms = _generate_instances_matrix(templates, prim, M)
 
     # cg_table is built from the unfiltered SALC list. Dropped SALCs produce
     # no instances, so their (ls, Lf, Lseq) keys are never looked up at

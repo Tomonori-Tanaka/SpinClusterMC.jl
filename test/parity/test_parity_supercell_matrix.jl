@@ -83,19 +83,14 @@ function _position_perm(hm, hl)
     return perm
 end
 
-# The matrix path (un-fold, geometrically faithful — clusters defined by their
-# relative vector) and the legacy diagonal `repeat` path (folded — the base
-# cell's atom-index pairing replicated) are INTENTIONALLY different models for
-# n > 1 when the model has half-period ("face") pairs:
-#   * at n = 1 they coincide (base cell == supercell);
-#   * for a ferromagnet they agree at all n (the un-fold conserves the count, so
-#     the ground-state energy density is preserved);
-#   * for a non-collinear config at n > 1 they differ — legacy double-weights a
-#     folded neighbor, the matrix path splits it into the two distinct ±Δ
-#     neighbors. The matrix value is the geometrically correct one. (Phase 2 will
-#     unify `repeat` onto the un-fold path once the fast template kernel supports
-#     it.) This test pins that contract so a future change is noticed.
-@testset "matrix (un-fold) vs legacy repeat (folded): intended divergence" begin
+# Phase 2: `repeat` is now sugar for `supercell_matrix = reshape_base * diag(n)`,
+# so the diagonal `repeat` path and the equivalent matrix path are the SAME
+# un-fold model. They must agree for ANY configuration at every n (not just for a
+# ferromagnet). Both paths even share the same cell-major numbering, so the same
+# spin array gives the same energy without re-permuting. (Pre-Phase-2 these were
+# intentionally different for non-collinear configs at n > 1; that divergence is
+# gone now that repeat un-folds.)
+@testset "repeat ≡ supercell_matrix = reshape_base*diag(n) (un-fold unification)" begin
     path = joinpath(@__DIR__, "..", "bcc_2x2x2", "jphi.xml")
     if !isfile(path)
         @info "Skipping: bcc fixture missing"
@@ -108,23 +103,13 @@ end
             hm = OPT.load_sce_hamiltonian(path; supercell_matrix = rb *
                                                                    [n 0 0; 0 n 0; 0 0 n])
             @test hm.n_atoms == hl.n_atoms
-            perm = _position_perm(hm, hl)
-            # Ferro: agree at every n (ground-state energy density preserved).
+            # Identical numbering: positions agree index-for-index.
+            @test _position_perm(hm, hl) == collect(1:hm.n_atoms)
+            # Same energy for the same config — ferro and a random non-collinear one.
             fz = repeat(Float64[0, 0, 1], 1, hm.n_atoms)
-            @test isapprox(OPT.sce_energy(hm, fz), OPT.sce_energy(hl, fz); atol = 1.0e-7)
-            # Random config mapped by position.
+            @test isapprox(OPT.sce_energy(hm, fz), OPT.sce_energy(hl, fz); atol = 1.0e-9)
             sm = _rand_spins(hm.n_atoms, rng)
-            sl = similar(sm)
-            for i in 1:hm.n_atoms
-                sl[:, perm[i]] = sm[:, i]
-            end
-            em = OPT.sce_energy(hm, sm)
-            el = OPT.sce_energy(hl, sl)
-            if n == 1
-                @test isapprox(em, el; atol = 1.0e-7)         # coincide at base cell
-            else
-                @test !isapprox(em, el; atol = 1.0e-6)        # diverge for n > 1
-            end
+            @test isapprox(OPT.sce_energy(hm, sm), OPT.sce_energy(hl, sm); atol = 1.0e-9)
         end
     end
 end

@@ -248,16 +248,18 @@ function init_spins(
     )
     )
     ncols = size(spec, 2)
-    if ncols == n_atoms
-        return _normalize_supercell_matrix(spec, n_atoms)
-    elseif ncols == base_n_atoms
-        return _tile_base_matrix(spec, n_atoms, base_n_atoms)
-    end
-    throw(
+    # Phase 2: only a full supercell config is accepted. Base-cell tiling
+    # (`ncols == base_n_atoms` with `n_atoms > base_n_atoms`) is unavailable
+    # because the un-fold numbering is primitive cell-major — a base-cell pattern
+    # can no longer be replicated meaningfully (use :random or a full config).
+    ncols == n_atoms || throw(
         ArgumentError(
-        "initial_spins matrix has $(ncols) columns; expected $(base_n_atoms) (base) or $(n_atoms) (supercell)"
+        "initial_spins matrix has $(ncols) columns; expected $(n_atoms) " *
+        "(full supercell config, primitive cell-major order). Base-cell tiling " *
+        "is unavailable on the un-fold path."
     )
     )
+    return _normalize_supercell_matrix(spec, n_atoms)
 end
 
 function init_spins(
