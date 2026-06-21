@@ -22,8 +22,10 @@
 
 > 依存: P2-M1。
 
-- [ ] `_template_local_energy!` を `i→(cell_id,subl)` 分解 + cell-major SAI で
-      書き換え (N=2/3 fast, N≥4 on-the-fly wrap)。
+- [x] `_template_local_energy!` を `i→(cell_id,subl)` 分解 + cell-major SAI で
+      書き換え (N=2/3 fast `_contract_n{2,3}_unfold_changed`, N≥4 generic
+      fallback)。同一プロセス A/B で fege 1.90× / ferh 2.45×、bit-identical。
+      (2026-06-21)
 - [ ] `:tensor_template` と `:tensor` が一般 M・random 配置で **総エネルギー一致**
       (init! 初期化 + sweep! ΔE 両方)。
 - [ ] `:tensor_template`+`supercell_matrix` のエラー (Phase 1) を解除。
@@ -71,7 +73,8 @@
 ## P2-M6: docs + レビュー
 
 - [ ] `repeat` が un-fold 糖衣・folded 廃止を docstring/terminology/README に反映。
-      `design_notes.md` の Phase 2 future-work を「完了」に。
+      `design_notes.md` の Phase 2 future-work を「完了」に。[x] design_notes 反映済
+      (N=2/3 高速パス + ベンチ含む, 2026-06-21)。
 - [ ] `JuliaFormatter` (src/simple, 共有, test/simple, test/parity)。
       `template_energy.jl`/`JPhiMagestyCarlo.jl` は既存スタイル維持で整形対象外
       (CLAUDE.md)。

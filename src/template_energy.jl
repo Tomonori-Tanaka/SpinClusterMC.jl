@@ -201,15 +201,20 @@ function _build_sai_table_cellmajor(
     return UnfoldSAITable(entry_off, entry_tmpl, sai_off, sai)
 end
 
-# Full tensor contraction of one un-fold cluster instance (`PrimClusterTemplate`
-# `t` placed onto supercell atoms `atoms`), organized with `changed` (the swept
-# atom) as the inner SIMD index. Identical math to
-# `_tensor_contract_template_changed!` but reads the per-site data from `t` and
-# uses the explicit `atoms` tuple. If `changed` occupies several sites of the
-# instance (a small-cell self-overlap), the first occurrence is treated as the
-# changed site and the others read the same `zlm_cache[changed]` row, so the full
-# multilinear contraction is still evaluated correctly. Returns the contraction
-# value (caller multiplies by `t.prefactor`).
+# Generic (any body size N) tensor contraction of one un-fold cluster instance
+# (`PrimClusterTemplate` `t` placed onto supercell atoms `atoms`), organized with
+# `changed` (the swept atom) as the inner SIMD index. The `N - 1` other sites are
+# enumerated by a mixed-radix `combo_id` loop over their `dims`, reading per-site
+# data from `t` and the explicit `atoms` tuple. If `changed` occupies several
+# sites of the instance (a small-cell self-overlap), the first occurrence is
+# treated as the changed site and the others read the same `zlm_cache[changed]`
+# row, so the full multilinear contraction is still evaluated correctly. Returns
+# the contraction value (caller multiplies by `t.prefactor`).
+#
+# `_template_local_energy!` dispatches the common N=2 / N=3 body sizes to the
+# unrolled `_contract_n2_unfold_changed` / `_contract_n3_unfold_changed` below
+# (same math, no `combo_id` / scratch-buffer machinery); this generic kernel is
+# the N≥4 fallback. All three agree bit-for-bit.
 @inline function _tensor_contract_unfold_changed!(
     other_sites_buf::AbstractVector{Int},
     cart_idx_buf::AbstractVector{Int},
@@ -301,5 +306,118 @@ end
         tensor_result += t.cbc_coefficient[mf_idx] * mf_contribution
     end
 
+    return tensor_result
+end
+
+# Unrolled N=2 (pair) specialization of `_tensor_contract_unfold_changed!`. With a
+# single other site there is no mixed-radix `combo_id` to decode and no scratch
+# buffer to index, so the contraction is a plain double loop over the other site's
+# `m` and the changed site's `m` (innermost, SIMD), summed over the Mf coefficient
+# index. `p` is the changed site (1 or 2; first occurrence on self-overlap), `o`
+# the other. Same math and summation order as the generic kernel, hence identical
+# results. Returns the contraction value (caller multiplies by `t.prefactor`).
+@inline function _contract_n2_unfold_changed(
+    t::PrimClusterTemplate,
+    atoms::AbstractVector{Int},
+    zlm_cache::Matrix{Float64},
+    changed_atom::Int,
+)::Float64
+    @inbounds p = (atoms[1] == changed_atom) ? 1 : 2
+    o = 3 - p
+    ls = t.ls
+    strides = t.strides
+    @inbounds lp = ls[p]
+    @inbounds lo = ls[o]
+    dims_p = 2 * lp + 1
+    dims_o = 2 * lo + 1
+    @inbounds stride_p = strides[p]
+    @inbounds stride_o = strides[o]
+    @inbounds stride_mf = strides[3]
+    base_p = lp * lp
+    base_o = lo * lo
+    @inbounds atom_o = atoms[o]
+    coeff_flat = t.coeff_flat
+    cbc_coefficient = t.cbc_coefficient
+    Mf_size = length(cbc_coefficient)
+    tensor_result = 0.0
+    @inbounds for mf_idx in 1:Mf_size
+        base_mf = 1 + (mf_idx - 1) * stride_mf
+        mf_contribution = 0.0
+        for mo_idx in 1:dims_o
+            z_other = zlm_cache[atom_o, base_o + mo_idx]
+            base_other = base_mf + (mo_idx - 1) * stride_o
+            inner = 0.0
+            @simd for mp_idx in 1:dims_p
+                inner += coeff_flat[base_other + (mp_idx - 1) * stride_p] *
+                         zlm_cache[changed_atom, base_p + mp_idx]
+            end
+            mf_contribution += z_other * inner
+        end
+        tensor_result += cbc_coefficient[mf_idx] * mf_contribution
+    end
+    return tensor_result
+end
+
+# Unrolled N=3 (triplet) specialization of `_tensor_contract_unfold_changed!`. The
+# two other sites `a`, `b` are enumerated by an explicit nested loop (no
+# mixed-radix decode / scratch buffer) with the changed site's `m` innermost
+# (SIMD). `p` is the changed site (1, 2, or 3; first occurrence on self-overlap),
+# `(o1, o2)` the two others in ascending order. The generic kernel decodes its
+# `combo_id` so that the first other site (`o1`) varies fastest; this kernel
+# mirrors that by looping `o1` in the inner position, so the accumulation order —
+# and hence the floating-point result — is bit-for-bit identical to the generic
+# path (preserving the `:tensor_template` ≡ `:tensor` trajectory invariant).
+# Returns the contraction value (caller multiplies by `t.prefactor`).
+@inline function _contract_n3_unfold_changed(
+    t::PrimClusterTemplate,
+    atoms::AbstractVector{Int},
+    zlm_cache::Matrix{Float64},
+    changed_atom::Int,
+)::Float64
+    @inbounds p = (atoms[1] == changed_atom) ? 1 : ((atoms[2] == changed_atom) ? 2 : 3)
+    o1 = p == 1 ? 2 : 1
+    o2 = p == 3 ? 2 : 3
+    ls = t.ls
+    strides = t.strides
+    @inbounds lp = ls[p]
+    @inbounds la = ls[o1]
+    @inbounds lb = ls[o2]
+    dims_p = 2 * lp + 1
+    dims_a = 2 * la + 1
+    dims_b = 2 * lb + 1
+    @inbounds stride_p = strides[p]
+    @inbounds stride_a = strides[o1]
+    @inbounds stride_b = strides[o2]
+    @inbounds stride_mf = strides[4]
+    base_p = lp * lp
+    base_a = la * la
+    base_b = lb * lb
+    @inbounds atom_a = atoms[o1]
+    @inbounds atom_b = atoms[o2]
+    coeff_flat = t.coeff_flat
+    cbc_coefficient = t.cbc_coefficient
+    Mf_size = length(cbc_coefficient)
+    tensor_result = 0.0
+    @inbounds for mf_idx in 1:Mf_size
+        base_mf = 1 + (mf_idx - 1) * stride_mf
+        mf_contribution = 0.0
+        # `o2` (slower) outer, `o1` (faster) inner: matches the generic kernel's
+        # `combo_id` decode order so the accumulation is bit-for-bit identical.
+        for mb_idx in 1:dims_b
+            z_b = zlm_cache[atom_b, base_b + mb_idx]
+            base_b_off = base_mf + (mb_idx - 1) * stride_b
+            for ma_idx in 1:dims_a
+                z_a = zlm_cache[atom_a, base_a + ma_idx]
+                base_ab = base_b_off + (ma_idx - 1) * stride_a
+                inner = 0.0
+                @simd for mp_idx in 1:dims_p
+                    inner += coeff_flat[base_ab + (mp_idx - 1) * stride_p] *
+                             zlm_cache[changed_atom, base_p + mp_idx]
+                end
+                mf_contribution += z_a * z_b * inner
+            end
+        end
+        tensor_result += cbc_coefficient[mf_idx] * mf_contribution
+    end
     return tensor_result
 end

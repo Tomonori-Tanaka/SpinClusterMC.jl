@@ -921,7 +921,10 @@ include("spin_utils.jl")
 
     # Un-fold path (general supercell matrix M; `repeat` is sugar for it): walk the
     # per-atom cell-major de-duplicated instance table. Each entry is the full
-    # contraction of a distinct cluster instance touching atom `i`.
+    # contraction of a distinct cluster instance touching atom `i`. Body sizes N=2
+    # and N=3 (the overwhelming majority of clusters) use the unrolled
+    # `_contract_n{2,3}_unfold_changed` fast paths; N≥4 falls back to the generic
+    # `_tensor_contract_unfold_changed!`. All three contract identically.
     unfold = tpl.unfold
     templates = tpl.prim_templates
     sai = unfold.sai
@@ -930,15 +933,22 @@ include("spin_utils.jl")
         t = templates[unfold.entry_tmpl[ent]]
         lo = unfold.sai_off[ent]
         hi = unfold.sai_off[ent + 1] - 1
+        n_sites = hi - lo + 1
         atoms = view(sai, lo:hi)
-        e += t.prefactor * _tensor_contract_unfold_changed!(
-            mc.contract_other_sites,
-            mc.contract_cart_idx,
-            t,
-            atoms,
-            mc.zlm_cache,
-            i,
-        )
+        if n_sites == 2
+            e += t.prefactor * _contract_n2_unfold_changed(t, atoms, mc.zlm_cache, i)
+        elseif n_sites == 3
+            e += t.prefactor * _contract_n3_unfold_changed(t, atoms, mc.zlm_cache, i)
+        else
+            e += t.prefactor * _tensor_contract_unfold_changed!(
+                mc.contract_other_sites,
+                mc.contract_cart_idx,
+                t,
+                atoms,
+                mc.zlm_cache,
+                i,
+            )
+        end
     end
     return e
 end

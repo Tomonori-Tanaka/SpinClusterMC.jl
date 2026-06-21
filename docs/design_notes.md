@@ -241,20 +241,29 @@ bcc_2x2x2 の `repeat` フィールドは XML 上は (2,2,2) 設定の派生だ�
   に opaque field として保持するか、energy module 内に lazy-init するか。Carlo の MC 型
   (M7) に保持させるのが最もスコープが狭くて良さそう。
 
-## Future work: optimized 一般スーパーセルの高速パス (Phase 2)
+## optimized 一般スーパーセルの高速パス (Phase 2, 完了)
 
 `supercell_matrix`（一般 3×3 整数行列）対応は、Simple 全カーネルと optimized の
-`:tensor` リファレンス/キャッシュカーネルで完了している
+全カーネル（`:tensor` リファレンス/キャッシュ + `:tensor_template` 高速パス）で
+完了している
 (spec: [`260620-general-supercell`](specs/260620-general-supercell/),
-[`260620-optimized-general-supercell`](specs/260620-optimized-general-supercell/))。
+[`260620-optimized-general-supercell`](specs/260620-optimized-general-supercell/),
+[`260621-template-unfold`](specs/260621-template-unfold/))。
 
-未対応（Phase 2）:
+Phase 2 で実施済み:
 
-- **optimized の `:tensor_template` 高速パスの一般 M 対応**。現状 SAI テーブル /
-  `_tile_coords` / `_foreach_base_instance` (`src/template_energy.jl`) が対角 tile
-  前提に深く結合しており、一般 M では `:tensor` カーネルにフォールバックする。
-  primitive cell-major (cell_id + sublattice) ベースに SAI テーブルと tile 座標
-  復元を作り直せば、一般 M でもデフォルト高速パスを使える。
-- **一般 M のベンチマーク** (`benchmark/`)。Phase 1 では `:tensor` のみで
-  `:tensor_template` との非対称比較になるため、Phase 2 (高速パス対応) 後に
-  `repeat(:tensor_template)` 相当と比較するベンチを追加する。
+- **`:tensor_template` 高速パスの一般 M 対応 (un-fold)**。旧 SAI テーブル /
+  `_tile_coords` / `_foreach_base_instance` の対角 tile 前提コードを撤去し、
+  primitive cell-major (`PrimClusterTemplate` + `UnfoldSAITable`) ベースに作り直した。
+  `repeat=(n1,n2,n3)` は `M = reshape_base * diag(n)` の糖衣として同じ un-fold パスを
+  通る。一般 M でもデフォルト高速パスが使える。
+- **N=2/3 特殊化カーネル** (`_contract_n{2,3}_unfold_changed`, `src/template_energy.jl`)。
+  body サイズ N=2/3（実 fixture のクラスタのほぼ全数。fege/bcc=100% N=2、
+  ferh=99.3% N=3）を、generic kernel の mixed-radix `combo_id` 展開とスクラッチ
+  バッファを除いた手書き nested-loop に置換。N≥4 は generic にフォールバック。
+  総和順序を generic と厳密一致させ、`:tensor_template ≡ :tensor` の bit-for-bit
+  トラジェクトリ不変条件を保持（`test/optimized/test_supercell_matrix.jl` に
+  ferh 単一 primitive cell の N=3 ケースを追加して通常テストで担保）。
+- **ベンチマーク**: 同一プロセス interleaved A/B (`Carlo.sweep!`, macOS の core 振り分け
+  変動を排除)。generic→specialized で fege(2×2×2, 512 atoms, N=2) **1.90×**、
+  ferh(1×1×1, 128 atoms, N=3) **2.45×**、いずれも 0 alloc・エネルギー bit-identical。

@@ -9,6 +9,11 @@ const OPT = SpinClusterMC.JPhiMagestyCarlo
 
 const BCC = joinpath(@__DIR__, "..", "bcc_2x2x2", "jphi.xml")
 const FEGE = joinpath(@__DIR__, "..", "fege_2x2x2", "jphi.xml")
+# FeRh has N=3 (triplet) clusters; a single primitive cell (supercell_matrix = I,
+# n_atoms = 2) reproduces them under extreme self-overlap, exercising the N=3
+# un-fold fast path (`_contract_n3_unfold_changed`) cheaply in the regular suite.
+# (BCC/FeGe are N=2 only; the full FeRh supercell parity lives in the slow tests.)
+const FERH = joinpath(@__DIR__, "..", "ferh_4x4x4", "jphi.xml")
 
 _ferro(n) = repeat(Float64[0, 0, 1], 1, n)
 
@@ -91,6 +96,7 @@ end
         (BCC, [3 1 0; 0 1 0; 0 0 2]),
         (FEGE, [1 0 0; 0 1 0; 0 0 2]),
         (FEGE, [1 1 0; 0 2 0; 0 0 1]),
+        (FERH, [1 0 0; 0 1 0; 0 0 1]),     # N=3 clusters (single primitive cell)
     ]
     for (xml, M) in cases
         h = OPT.load_sce_hamiltonian(xml; supercell_matrix = M)
@@ -135,6 +141,7 @@ end
         (BCC, [3 1 0; 0 1 0; 0 0 2]),
         (FEGE, [1 0 0; 0 1 0; 0 0 2]),
         (FEGE, [1 1 0; 0 2 0; 0 0 1]),
+        (FERH, [1 0 0; 0 1 0; 0 0 1]),     # N=3 fast path vs generic (self-overlap)
     ]
     for (xml, M) in cases
         res = Dict{Symbol, Any}()
