@@ -29,7 +29,7 @@ where `T_real` is fetched from `CGTable` by `(ls, Lf, Lseq)`.
 # Fields
 
 - `atoms`: Supercell atom indices for the N sites of this instance, in the
-  same order as `ls`. For `repeat == (1, 1, 1)` these equal base-cell indices.
+  same order as `ls`. Numbering is primitive cell-major (the un-fold path).
 - `ls`: Orbital angular momentum per site, length `N = body`. Mirrors
   `SALCBasisData.ls`.
 - `Lf`: Final total angular momentum of the parent SALC. 0 = isotropic.
@@ -184,7 +184,7 @@ supercell-fractional positions. The energy code does not read them — every
 cluster term refers to atoms by their integer supercell index, and the
 spherical harmonics are evaluated on the *spin direction*, never on a real-
 space position. Geometry is only consumed during construction, in
-`_generate_instances`, where the base-cell `pos_frac` from the parser is used
+`_generate_instances_matrix`, where the base-cell `pos_frac` from the parser is used
 to compute inter-tile wraps. If a downstream extension (a position-dependent
 external term, structure-factor observable, visualization) needs lattice or
 positions, it should reload them from the XML or carry them itself.
@@ -209,7 +209,7 @@ positions, it should reload them from the XML or carry them itself.
   across every translation of `map_sym` and every tile, with atom indices
   rewritten to `1..n_atoms`. Per-basis deduplication drops translations that
   produce the same physical cluster (same sorted atoms + same `ls`);
-  multiplicity stays on the surviving instance. See `_generate_instances`.
+  multiplicity stays on the surviving instance. See `_generate_instances_matrix`.
 - `cg_table::CGTable` — read-only lookup of tesseral Clebsch-Gordan tensors
   keyed by `(ls, Lf, Lseq)`. The energy code fetches `T_real` from here
   rather than rebuilding it per cluster.
@@ -228,7 +228,7 @@ positions, it should reload them from the XML or carry them itself.
 # Construction
 
 `SpinClusterHamiltonian(xml_path::AbstractString; repeat=(1,1,1))` runs, in
-order: `parse_jphi_xml` → `_generate_instances` → `build_cg_table` →
+order: `parse_jphi_xml` → `_generate_instances_matrix` → `build_cg_table` →
 cache derivation (`max_l`, `atom_to_instance_indices`).
 """
 struct SpinClusterHamiltonian
@@ -241,94 +241,6 @@ struct SpinClusterHamiltonian
     atom_to_instance_indices::Vector{Vector{Int}}
 end
 
-@inline function _supercell_atom_index(
-        base_atom::Int,
-        ti::Integer,
-        tj::Integer,
-        tk::Integer,
-        base_n::Int,
-        repeat::NTuple{3, Int}
-)::Int
-    n1, n2, n3 = repeat
-    1 ≤ base_atom ≤ base_n ||
-        throw(ArgumentError("base_atom=$base_atom not in 1:$base_n"))
-    (0 ≤ ti < n1 && 0 ≤ tj < n2 && 0 ≤ tk < n3) ||
-        throw(ArgumentError("tile ($ti,$tj,$tk) out of range for repeat=$repeat"))
-    return base_atom + base_n * (ti + n1 * tj + n1 * n2 * tk)
-end
-
-# Replicate each <basis> across every translation column of map_sym and every
-# tile of the supercell, then deduplicate so each physical cluster appears
-# exactly once. Multiplicity stays on the kept instance.
-#
-# Matches `JPhiMagestyCarlo._foreach_translated_instance` (per-cbc):
-# - For each tile `(ti, tj, tk)` and each translation `t`, map the base atoms
-#   to their supercell image, with an integer wrap so basis bonds that cross
-#   a base-cell boundary land in the adjacent tile.
-# - Drop any translated atom set whose (sorted-atoms, ls) signature has
-#   already been seen for this basis. Different bases may legitimately
-#   produce the same physical cluster, so the Set is per-basis, not global.
-function _generate_instances(
-        salcs::AbstractVector{SALCData},
-        jphi::AbstractVector{Float64},
-        map_sym::AbstractMatrix{Int},
-        base_pos_frac::AbstractMatrix{Float64},
-        base_n::Int,
-        repeat::NTuple{3, Int};
-        jphi_threshold::Float64 = 0.0
-)::Vector{ClusterInstance}
-    n1, n2, n3 = repeat
-    n_trans = size(map_sym, 2)
-    instances = ClusterInstance[]
-    for (s, salc) in enumerate(salcs)
-        J = jphi[s]
-        # `abs(J) < 0.0` is always false, so threshold=0.0 keeps every SALC
-        # bit-exactly (no early `continue` fires).
-        abs(J) < jphi_threshold && continue
-        for basis in salc.bases
-            ls_v = collect(Int, basis.ls)
-            seen = Set{Tuple{Vector{Int}, Vector{Int}}}()
-            for tk in 0:(n3 - 1), tj in 0:(n2 - 1), ti in 0:(n1 - 1)
-                for t in 1:n_trans
-                    translated_base = [map_sym[a, t] for a in basis.atoms]
-                    p_ref = @view base_pos_frac[:, translated_base[1]]
-                    super_atoms = Vector{Int}(undef, length(translated_base))
-                    for (k, ba) in enumerate(translated_base)
-                        p = @view base_pos_frac[:, ba]
-                        w1 = round(Int, p[1] - p_ref[1])
-                        w2 = round(Int, p[2] - p_ref[2])
-                        w3 = round(Int, p[3] - p_ref[3])
-                        super_atoms[k] = _supercell_atom_index(
-                            ba,
-                            mod(ti + w1, n1),
-                            mod(tj + w2, n2),
-                            mod(tk + w3, n3),
-                            base_n,
-                            repeat
-                        )
-                    end
-                    key = (sort(super_atoms), ls_v)
-                    key in seen && continue
-                    push!(seen, key)
-                    push!(
-                        instances,
-                        ClusterInstance(
-                            super_atoms,
-                            basis.ls,
-                            salc.Lf,
-                            basis.Lseq,
-                            basis.weights,
-                            J,
-                            basis.multiplicity
-                        )
-                    )
-                end
-            end
-        end
-    end
-    return instances
-end
-
 """
     SpinClusterHamiltonian(xml_path; repeat=(1, 1, 1), supercell_matrix=nothing,
                            jphi_threshold=0.0) -> SpinClusterHamiltonian
@@ -337,19 +249,21 @@ Load a Magesty `jphi.xml` and build the full Hamiltonian: parse the XML,
 generate the cluster instances for the requested supercell, and build the
 tesseral CG table.
 
-Two supercell modes (mutually exclusive):
+Two equivalent ways to specify the supercell (mutually exclusive); both take the
+same un-fold path (Phase 2):
 
-- `repeat = (n_1, n_2, n_3)` (default): an integer **diagonal multiple of the
-  base (XML) cell**. Uses the original `_generate_instances` path, so behavior
-  and atom numbering are unchanged.
+- `repeat = (n_1, n_2, n_3)` (default): sugar for
+  `supercell_matrix = reshape_base * diag(n_1, n_2, n_3)`. Because the base (XML)
+  cell is itself a supercell of the primitive cell, even `repeat = (1, 1, 1)`
+  un-folds into the primitive cells with cell-major numbering; the physical
+  energy is unchanged but the atom index → atom map is no longer the historical
+  tile-major one.
 - `supercell_matrix = M` (3×3 integer matrix, `det(M) ≠ 0`): an **arbitrary
   supercell of the primitive cell** recovered from the XML's translation table.
   Handles non-diagonal and non-base-multiple cells (down to a single primitive
-  cell). Atoms use a primitive cell-major numbering; clusters are placed by their
-  relative vector and self-overlapping "face" pairs are un-folded into distinct
-  ±Δ neighbors (see `build_templates`). For a ferromagnet / ground state the
-  per-atom energy equals the base-cell model; for n > 1 non-collinear configs it
-  differs from the folded diagonal `repeat` path (and is geometrically correct).
+  cell). Both modes use primitive cell-major atom numbering; clusters are placed
+  by their relative vector and self-overlapping "face" pairs are un-folded into
+  distinct ±Δ neighbors (see `build_templates` / `_generate_instances_matrix`).
 
 # Arguments
 

@@ -34,8 +34,6 @@ using ..SupercellCommon: PrimitiveCell, extract_primitive, _int_det3, _adjugate3
 export SCEHamiltonian,
     load_sce_hamiltonian,
     sce_energy,
-    coupled_cluster_energy,
-    supercell_atom_index,
     JPhiSpinMC
 
 include("xml_io.jl")
@@ -163,58 +161,11 @@ Return `(4π)^(n_sites/2)` normalization used for cluster contributions.
 """
 @inline _cluster_scaling(n_sites::Integer)::Float64 = (4 * pi)^(n_sites / 2)
 
-@inline function supercell_atom_index(
-    base_atom::Int,
-    ti::Integer,
-    tj::Integer,
-    tk::Integer,
-    base_n::Int,
-    repeat::NTuple{3, Int},
-)::Int
-    n1, n2, n3 = repeat
-    1 ≤ base_atom ≤ base_n || throw(ArgumentError("base_atom=$base_atom not in 1:$base_n"))
-    0 ≤ ti < n1 && 0 ≤ tj < n2 && 0 ≤ tk < n3 ||
-        throw(ArgumentError("tile ($ti,$tj,$tk) out of range for repeat=$repeat"))
-    return base_atom + base_n * (ti + n1 * tj + n1 * n2 * tk)
-end
-
-"""
-Build supercell lattice and wrapped fractional positions from base-cell data.
-"""
-function _build_supercell_geometry(
-    lattice::Matrix{Float64},
-    pos_base_frac::Matrix{Float64},
-    base_n::Int,
-    repeat::NTuple{3, Int},
-)
-    n1, n2, n3 = repeat
-    a1 = @view lattice[:, 1]
-    a2 = @view lattice[:, 2]
-    a3 = @view lattice[:, 3]
-    lattice_super = hcat(n1 .* a1, n2 .* a2, n3 .* a3)
-    n_tot = base_n * n1 * n2 * n3
-    pos_super = zeros(3, n_tot)
-    for tk in 0:(n3 - 1)
-        for tj in 0:(n2 - 1)
-            for ti in 0:(n1 - 1)
-                for b in 1:base_n
-                    ia = supercell_atom_index(b, ti, tj, tk, base_n, repeat)
-                    r = lattice * pos_base_frac[:, b] + ti * a1 + tj * a2 + tk * a3
-                    x = lattice_super \ r
-                    x .-= floor.(x)
-                    pos_super[:, ia] .= x
-                end
-            end
-        end
-    end
-    return lattice_super, pos_super
-end
-
 """
 Build supercell lattice and wrapped fractional positions for the general
 supercell-matrix path: the primitive cell `prim` tiled by the integer matrix
 `M` (primitive-cell units). Atom numbering is primitive cell-major
-(`subl + n_prim*(cell_id-1)`), matching `_build_cluster_instances_matrix` via the
+(`subl + n_prim*(cell_id-1)`), matching `_build_cluster_instances` via the
 shared `_enumerate_cells` ordering, so geometry and instance atom indices agree.
 """
 function _build_supercell_geometry_matrix(prim::PrimitiveCell, M::SMatrix{3, 3, Int})
@@ -436,103 +387,6 @@ function _enabled_bodies_to_active_indices(
 end
 
 """
-	coupled_cluster_energy(cbc, spin_directions, map_sym; repeat, base_n_atoms) -> Float64
-
-Same contract as `Magesty.Optimize.design_matrix_energy_element`. For `repeat=(1,1,1)`, columns of
-`map_sym` are XML `trans=1..n_trans` and `map_sym[atom,t]` is the image within the base cell.
-
-With a supercell, for each tile `(ti,tj,tk)` and each translation `t`, base images are mapped to
-supercell atoms via `supercell_atom_index(map_sym[a,t], ti,tj,tk, base_n_atoms, repeat)` before the
-same tensor contraction. Deduplication always uses **sorted supercell atom indices** together with `ls`.
-"""
-function coupled_cluster_energy(
-    cbc::CoupledBasis_with_coefficient,
-    spin_directions::Union{AbstractMatrix{<:Real},AbstractVector{<:SVector{3,<:Real}}},
-    map_sym::AbstractMatrix{Int};
-    repeat::NTuple{3, Int} = (1, 1, 1),
-    base_n_atoms::Int = size(map_sym, 1),
-    pos_frac::Union{Nothing, AbstractMatrix{Float64}} = nothing,
-)::Float64
-    n_trans = size(map_sym, 2)
-    n1, n2, n3 = repeat
-    n_expect = base_n_atoms * n1 * n2 * n3
-    _n_spins(spin_directions) == n_expect ||
-        throw(ArgumentError("spin count $(_n_spins(spin_directions)) != supercell atoms $n_expect"))
-    result = 0.0
-    N = length(cbc.atoms)
-    scaling = _cluster_scaling(N)
-    searched_pairs = Set{Tuple{Vector{Int}, Vector{Int}}}()
-
-    for tk in 0:(n3 - 1)
-        for tj in 0:(n2 - 1)
-            for ti in 0:(n1 - 1)
-                for t in 1:n_trans
-                    translated_base = Int[map_sym[atom, t] for atom in cbc.atoms]
-                    if pos_frac !== nothing
-                        # pos_frac is expected to be BASE-CELL fractional positions (3×base_n).
-                        p_ref = pos_frac[:, translated_base[1]]
-                        translated_atoms = Vector{Int}(undef, length(translated_base))
-                        for (k, ba) in enumerate(translated_base)
-                            p = pos_frac[:, ba]
-                            w1 = round(Int, p[1] - p_ref[1])
-                            w2 = round(Int, p[2] - p_ref[2])
-                            w3 = round(Int, p[3] - p_ref[3])
-                            translated_atoms[k] = supercell_atom_index(
-                                ba, mod(ti + w1, n1), mod(tj + w2, n2), mod(tk + w3, n3),
-                                base_n_atoms, repeat,
-                            )
-                        end
-                    else
-                        translated_atoms = Int[
-                            supercell_atom_index(ba, ti, tj, tk, base_n_atoms, repeat) for
-                            ba in translated_base
-                        ]
-                    end
-                    atoms_sorted = sort(translated_atoms)
-                    pair = (atoms_sorted, cbc.ls)
-                    pair in searched_pairs && continue
-                    push!(searched_pairs, pair)
-
-                    sh_values = Vector{Vector{Float64}}(undef, N)
-                    sph_local = SphericalHarmonics(maximum(cbc.ls))
-                    for (site_idx, atom) in enumerate(translated_atoms)
-                        l = cbc.ls[site_idx]
-                        sh_values[site_idx] = Vector{Float64}(undef, 2 * l + 1)
-                        u = _spin_at(spin_directions, atom)
-                        y = compute(sph_local,
-                                    SVector{3,Float64}(u[1], u[2], u[3]))
-                        base = l * l
-                        @inbounds @simd for m_idx in 1:(2 * l + 1)
-                            sh_values[site_idx][m_idx] = y[base + m_idx]
-                        end
-                    end
-
-                    tensor_result = 0.0
-                    Mf_size = size(cbc.coeff_tensor, N + 1)
-                    dims = [2 * l + 1 for l in cbc.ls]
-                    for mf_idx in 1:Mf_size
-                        mf_contribution = 0.0
-                        for site_idx_tuple in CartesianIndices(Tuple(dims))
-                            product = 1.0
-                            for (site_idx, m_idx) in enumerate(site_idx_tuple.I)
-                                product *= sh_values[site_idx][m_idx]
-                            end
-                            tensor_idx = (site_idx_tuple.I..., mf_idx)
-                            mf_contribution += cbc.coeff_tensor[tensor_idx...] * product
-                        end
-                        tensor_result += cbc.coefficient[mf_idx] * mf_contribution
-                    end
-
-                    result += tensor_result * cbc.multiplicity * scaling
-                end
-            end
-        end
-    end
-
-    return result
-end
-
-"""
 Evaluate one cluster tensor contraction for the provided translated atoms.
 """
 @inline function _tensor_contract_instance(
@@ -572,104 +426,23 @@ Evaluate one cluster tensor contraction for the provided translated atoms.
     return tensor_result
 end
 
-# Iterate over every unique translated cluster instance for `cbc` in the supercell
-# defined by `h`, calling `f(translated_atoms)` for each. Deduplication (by sorted
-# atom-index tuple) is handled here so callers don't repeat it.
-function _foreach_translated_instance(f, h::SCEHamiltonian, cbc)
-    n1, n2, n3 = h.repeat
-    n1f, n2f, n3f = Float64(n1), Float64(n2), Float64(n3)
-    N = length(cbc.atoms)
-    seen = Set{Tuple{Vector{Int}, Vector{Int}}}()
-    for tk in 0:(n3 - 1), tj in 0:(n2 - 1), ti in 0:(n1 - 1)
-        for t in 1:h.n_trans
-            translated_base = Int[h.map_sym[a, t] for a in cbc.atoms]
-            p_ref = h.pos_frac[:, translated_base[1]]
-            f_ref = (p_ref[1] * n1f, p_ref[2] * n2f, p_ref[3] * n3f)
-            translated_atoms = Vector{Int}(undef, N)
-            for (k, ba) in enumerate(translated_base)
-                p = h.pos_frac[:, ba]
-                w1 = round(Int, p[1] * n1f - f_ref[1])
-                w2 = round(Int, p[2] * n2f - f_ref[2])
-                w3 = round(Int, p[3] * n3f - f_ref[3])
-                translated_atoms[k] = supercell_atom_index(
-                    ba,
-                    mod(ti + w1, n1),
-                    mod(tj + w2, n2),
-                    mod(tk + w3, n3),
-                    h.base_n_atoms,
-                    h.repeat,
-                )
-            end
-            atoms_sorted = sort(translated_atoms)
-            pair = (atoms_sorted, cbc.ls)
-            pair in seen && continue
-            push!(seen, pair)
-            f(translated_atoms)
-        end
-    end
-end
-
 """
-Enumerate unique translated cluster instances and precompute metadata.
-"""
-function _build_cluster_instances(h::SCEHamiltonian)::Vector{ClusterInstance}
-    h.supercell_matrix === nothing || return _build_cluster_instances_matrix(h)
-    instances = ClusterInstance[]
-    # Shared coeff_flat per unique cbc object: multiple ClusterInstances that are
-    # geometric translations of the same cbc would otherwise each get a separate
-    # Vector allocation, multiplying memory by the number of translations.
-    coeff_flat_cache = Dict{UInt, Vector{Float64}}()
+Enumerate the un-fold cluster instances of `h` and precompute their metadata.
 
-    for (s, group) in enumerate(h.salc_list)
-        js = h.jphi[s]
-        for cbc in group
-            scaling = _cluster_scaling(length(cbc.atoms))
-            N_cbc = length(cbc.atoms)
-            inst_dims = [2 * l + 1 for l in cbc.ls]
-            inst_strides = _compute_instance_strides(cbc.ls)
-            inst_Mf_size = size(cbc.coeff_tensor, N_cbc + 1)
-            inst_coeff_flat = get!(coeff_flat_cache, objectid(cbc)) do
-                vec(collect(Float64, cbc.coeff_tensor))
-            end
-            _foreach_translated_instance(h, cbc) do translated_atoms
-                push!(
-                    instances,
-                    ClusterInstance(
-                        translated_atoms,
-                        cbc,
-                        js * cbc.multiplicity * scaling,
-                        inst_dims,
-                        inst_strides,
-                        inst_coeff_flat,
-                        inst_Mf_size,
-                    ),
-                )
-            end
-        end
-    end
-    return instances
-end
-
-"""
-Build cluster instances for the general supercell-matrix path (Phase 1).
-
-Mirrors `_build_cluster_instances` but tiles each coupled basis onto the
-primitive-cell supercell `M` (via `SupercellCommon`): the cluster's pivot-relative
-offsets (`_cluster_offsets`) are placed at every supercell cell and wrapped
-(`_wrap_offset_into_supercell`), using primitive cell-major atom numbering
+Tiles each coupled basis onto the supercell matrix `M` (via `SupercellCommon`;
+`repeat` is sugar for `M = reshape_base * diag(repeat)`): the cluster's
+pivot-relative offsets (`_cluster_offsets`) are placed at every supercell cell and
+wrapped (`_wrap_offset_into_supercell`), using primitive cell-major atom numbering
 (`subl + n_prim*(cell_id-1)`). The XML self-overlap is un-folded
-(`effective_mult = cbc.multiplicity ÷ s_base`); placements that fold onto the
-same sorted atom set in `M` accumulate their multiplicity. The resulting
+(`effective_mult = cbc.multiplicity ÷ s_base`); placements that fold onto the same
+sorted atom set in `M` accumulate their multiplicity. The resulting
 `prefactor = jphi * total_mult * scaling` un-folds each cluster onto its distinct
-±Δ neighbors (clusters are geometric — defined by their relative vector). For a
-ferromagnet / ground state this equals the base-cell energy density; for n > 1
-non-collinear configs it differs from the folded diagonal `repeat` path and is
-the geometrically faithful one.
+±Δ neighbors (clusters are geometric — defined by their relative vector).
 
 The low-level contraction kernels (`_tensor_contract_instance*`) are unchanged;
 only the instance list this feeds differs.
 """
-function _build_cluster_instances_matrix(h::SCEHamiltonian)::Vector{ClusterInstance}
+function _build_cluster_instances(h::SCEHamiltonian)::Vector{ClusterInstance}
     prim = h.prim::PrimitiveCell
     M = SMatrix{3, 3, Int}(h.supercell_matrix)
     detM = _int_det3(M)
@@ -816,48 +589,23 @@ end
 """
     sce_energy(h, spin_directions) -> Float64
 
-SCE interaction energy (j0 excluded) for each SALC index `s`: the weighted sum of
-`coupled_cluster_energy` over every coupled cluster in `h.salc_list[s]`, with weights `h.jphi[s]`.
-j0 is intentionally excluded because this package is used for MC sampling where only ΔE matters.
+SCE interaction energy (j0 excluded) of the supercell: the sum of every un-fold
+cluster instance's tensor contraction (`_build_cluster_instances` weighted by
+`jphi * multiplicity * scaling`). j0 is intentionally excluded because this
+package is used for MC sampling where only ΔE matters.
 
-`spin_directions` should be `3 × h.n_atoms`: rows 1–3 are `x`, `y`, `z` of the spin direction; columns are
-supercell atoms (`a` → column `a`). Only the column count is checked here; each column is passed to
-`SpheriCart.compute` as a 3-vector inside `coupled_cluster_energy`. Shape matches `h.map_sym`, `h.repeat`, and
-`h.base_n_atoms` as in that routine.
+`spin_directions` should be `3 × h.n_atoms`: rows 1–3 are `x`, `y`, `z` of the
+spin direction; columns are supercell atoms (`a` → column `a`).
 
-For the general `supercell_matrix` path this rebuilds the instance list and sums
-`_energy_from_instances`; it is a reference/validation entry point (the MC hot
-path uses the prebuilt `LocalEnergyCache`), so the per-call rebuild is acceptable.
+This is a reference/validation entry point — it rebuilds the instance list on
+each call (the MC hot path uses the prebuilt `LocalEnergyCache` /
+`LocalEnergyTemplate`), so the per-call rebuild is acceptable.
 """
 function sce_energy(
     h::SCEHamiltonian,
     spin_directions::Union{AbstractMatrix{<:Real},AbstractVector{<:SVector{3,<:Real}}},
 )::Float64
-    # General supercell-matrix path: sum over the prebuilt matrix instances
-    # (the diagonal `coupled_cluster_energy` tiling does not apply when
-    # `repeat == (0, 0, 0)`).
-    if h.supercell_matrix !== nothing
-        return _energy_from_instances(_build_cluster_instances(h), spin_directions)
-    end
-    E = 0.0
-    n1, n2, n3 = h.repeat
-    # Recover base-cell fractional positions from supercell positions (tile-(0,0,0) block).
-    # h.pos_frac[:,ba] for ba in 1:base_n_atoms = base_frac / (n1,n2,n3).
-    base_pos = h.pos_frac[:, 1:h.base_n_atoms] .* [Float64(n1); Float64(n2); Float64(n3)]
-    for (s, group) in enumerate(h.salc_list)
-        js = h.jphi[s]
-        for cbc in group
-            E += js * coupled_cluster_energy(
-                cbc,
-                spin_directions,
-                h.map_sym;
-                repeat = h.repeat,
-                base_n_atoms = h.base_n_atoms,
-                pos_frac = base_pos,
-            )
-        end
-    end
-    return E
+    return _energy_from_instances(_build_cluster_instances(h), spin_directions)
 end
 
 include("template_energy.jl")
@@ -913,7 +661,7 @@ Carlo.start(Carlo.SingleScheduler, job)
 ## Initial spin configuration
 | Key | Type | Default | Description |
 |:----|:-----|:--------|:------------|
-| `:initial_spins` | `Matrix{<:Real}` of size `(3, base_n_atoms)` | (random) | Spin configuration for the **base cell** (`repeat = (1,1,1)`). If provided, this configuration is tiled periodically over the full supercell by `Carlo.init!`; otherwise all spins are drawn uniformly at random on the unit sphere. Each column is renormalized to a unit vector automatically. See [`_tile_base_spins!`](@ref) for the tiling convention. |
+| `:initial_spins` | `Matrix{<:Real}` of size `(3, n_atoms)` | (random) | Full supercell spin configuration, in the supercell's own primitive cell-major atom order. If provided, each column is assigned to the corresponding atom (renormalized to a unit vector); otherwise all spins are drawn uniformly at random on the unit sphere. Base-cell tiling (a `(3, base_n_atoms)` pattern) is not supported on the un-fold path — use `:random` or a full config. |
 
 ## Spin proposal
 | Key | Type | Default | Description |
@@ -1165,99 +913,26 @@ include("spin_utils.jl")
 @inline function _template_local_energy!(mc::JPhiSpinMC, i::Int)::Float64
     tpl = mc.local_template::LocalEnergyTemplate
 
-    # Phase-2 un-fold path (general supercell matrix): cell-major de-duplicated
-    # instance table. Each entry is the full contraction of a distinct cluster
-    # instance touching atom `i`.
+    # Un-fold path (general supercell matrix M; `repeat` is sugar for it): walk the
+    # per-atom cell-major de-duplicated instance table. Each entry is the full
+    # contraction of a distinct cluster instance touching atom `i`.
     unfold = tpl.unfold
-    if unfold !== nothing
-        templates = tpl.prim_templates
-        sai = unfold.sai
-        e = 0.0
-        @inbounds for ent in unfold.entry_off[i]:(unfold.entry_off[i + 1] - 1)
-            t = templates[unfold.entry_tmpl[ent]]
-            lo = unfold.sai_off[ent]
-            hi = unfold.sai_off[ent + 1] - 1
-            atoms = view(sai, lo:hi)
-            e += t.prefactor * _tensor_contract_unfold_changed!(
-                mc.contract_other_sites,
-                mc.contract_cart_idx,
-                t,
-                atoms,
-                mc.zlm_cache,
-                i,
-            )
-        end
-        return e
-    end
-
-    rep = mc.ham.repeat
-    base_n = mc.ham.base_n_atoms
-    b = ((i - 1) % base_n) + 1
+    templates = tpl.prim_templates
+    sai = unfold.sai
     e = 0.0
-
-    # N=2 fast path: SAIs precomputed in tpl.sai2_flat (no mod / no _tile_coords).
-    related2 = tpl.related2_by_base_atom[b]
-    sai2 = tpl.sai2_flat
-    sai2_off = tpl.sai2_offsets[i] - 1
-    @inbounds for rc_idx in 1:length(related2)
-        rc = related2[rc_idx]
-        inst2 = tpl.base_instances2[rc.inst_idx]
-        slot = sai2_off + 2 * (rc_idx - 1)
-        a1 = sai2[slot + 1]
-        a2 = sai2[slot + 2]
-        e += inst2.prefactor * _tensor_contract_template2_changed!(
-            inst2, a1, a2, mc.zlm_cache, i,
+    @inbounds for ent in unfold.entry_off[i]:(unfold.entry_off[i + 1] - 1)
+        t = templates[unfold.entry_tmpl[ent]]
+        lo = unfold.sai_off[ent]
+        hi = unfold.sai_off[ent + 1] - 1
+        atoms = view(sai, lo:hi)
+        e += t.prefactor * _tensor_contract_unfold_changed!(
+            mc.contract_other_sites,
+            mc.contract_cart_idx,
+            t,
+            atoms,
+            mc.zlm_cache,
+            i,
         )
-    end
-
-    # N=3 fast path: SAIs precomputed in tpl.sai3_flat.
-    related3 = tpl.related3_by_base_atom[b]
-    sai3 = tpl.sai3_flat
-    sai3_off = tpl.sai3_offsets[i] - 1
-    @inbounds for rc_idx in 1:length(related3)
-        rc = related3[rc_idx]
-        inst3 = tpl.base_instances3[rc.inst_idx]
-        slot = sai3_off + 3 * (rc_idx - 1)
-        a1 = sai3[slot + 1]
-        a2 = sai3[slot + 2]
-        a3 = sai3[slot + 3]
-        e += inst3.prefactor * _tensor_contract_template3_changed!(
-            inst3, a1, a2, a3, mc.zlm_cache, i,
-        )
-    end
-
-    # N≥4 general path: keeps on-the-fly SAI computation (no precomputed table).
-    # Both current test problems have zero N≥4 instances, so this branch is unused
-    # there; the local `_tile_coords` call below is only paid when N≥4 clusters
-    # actually exist.
-    related_other = tpl.related_by_base_atom[b]
-    if !isempty(related_other)
-        n1, n2, n3 = rep
-        ti, tj, tk = _tile_coords(i, base_n, rep)
-        for rc in related_other
-            inst = tpl.base_instances[rc.inst_idx]
-            N = length(inst.base_atoms)
-            pv1, pv2, pv3 = inst.tile_deltas[rc.pivot_k]
-            @inbounds for k in 1:N
-                d1, d2, d3 = inst.tile_deltas[k]
-                mc.atoms_buf[k] = supercell_atom_index(
-                    inst.base_atoms[k],
-                    mod(ti + d1 - pv1, n1),
-                    mod(tj + d2 - pv2, n2),
-                    mod(tk + d3 - pv3, n3),
-                    base_n,
-                    rep,
-                )
-            end
-            e += inst.prefactor * _tensor_contract_template_changed!(
-                mc.contract_other_sites,
-                mc.contract_cart_idx,
-                inst,
-                mc.atoms_buf,
-                mc.zlm_cache,
-                i,
-            )
-        end
     end
     return e
 end

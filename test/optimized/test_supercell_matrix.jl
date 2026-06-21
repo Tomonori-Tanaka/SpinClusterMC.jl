@@ -83,7 +83,7 @@ end
     # P2-M1: the un-fold template construction (_build_prim_cluster_templates +
     # _build_sai_table_cellmajor) must reconstruct exactly the same set of
     # supercell cluster instances as the :tensor un-fold reference
-    # (_build_cluster_instances_matrix), for several general supercell matrices.
+    # (_build_cluster_instances), for several general supercell matrices.
     # (xml, M) pairs: BCC (n_prim=1) and FeGe (n_prim=8, multi-sublattice).
     cases = [
         (BCC, [2 1 0; 0 2 0; 0 0 2]),
@@ -101,7 +101,7 @@ end
         # (cbc id, sorted atoms) and summing per-entry prefactors. The grouped
         # prefactors must equal those of the matrix un-fold instances touching i
         # (fold-accumulation preserved, self-overlap repeats collapsed).
-        instances = OPT._build_cluster_instances_matrix(h)
+        instances = OPT._build_cluster_instances(h)
         for i in 1:h.n_atoms
             tg = Dict{Tuple{UInt, Vector{Int}}, Float64}()
             for ent in tab.entry_off[i]:(tab.entry_off[i + 1] - 1)

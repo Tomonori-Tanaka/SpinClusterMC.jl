@@ -198,33 +198,3 @@ current direction and Metropolis acceptance is typically much higher than i.i.d.
     s = sin(θ)
     return c * ux + s * tx, c * uy + s * ty, c * uz + s * tz
 end
-
-"""
-    _tile_base_spins!(spins, initial_spins, base_n_atoms)
-
-Fill the supercell spin matrix `spins` (3 × n_atoms) by tiling `initial_spins`
-(3 × base_n_atoms).  The tiling follows the same atom-index convention as
-`supercell_atom_index`: supercell atom `ia` maps to base atom
-`((ia-1) % base_n_atoms) + 1`.  Each column of `initial_spins` is
-renormalized to a unit vector before writing.
-"""
-function _tile_base_spins!(
-    spins::AbstractVector{SVector{3,Float64}},
-    initial_spins::AbstractMatrix{<:Real},
-    base_n_atoms::Int,
-)
-    n_atoms = length(spins)
-    size(initial_spins) == (3, base_n_atoms) || throw(ArgumentError(
-        "initial_spins must be a 3×$(base_n_atoms) matrix, got $(size(initial_spins))",
-    ))
-    for ia in 1:n_atoms
-        ib = ((ia - 1) % base_n_atoms) + 1
-        sx = Float64(initial_spins[1, ib])
-        sy = Float64(initial_spins[2, ib])
-        sz = Float64(initial_spins[3, ib])
-        nrm = hypot(sx, sy, sz)
-        nrm > 0 || throw(ArgumentError("initial_spins column $ib has zero norm"))
-        spins[ia] = SVector(sx / nrm, sy / nrm, sz / nrm)
-    end
-    return nothing
-end

@@ -21,26 +21,10 @@ end
 
 @testset verbose=true "SpinClusterMC.jl" begin
 
-    # -----------------------------------------------------------------------
-    @testset "supercell_atom_index" begin
-        # repeat=(1,1,1): only tile (0,0,0) → same as base_atom
-        @test supercell_atom_index(1, 0, 0, 0, 4, (1, 1, 1)) == 1
-        @test supercell_atom_index(4, 0, 0, 0, 4, (1, 1, 1)) == 4
-
-        # repeat=(2,1,1): 8 atoms; tile (1,0,0) → base + 4
-        @test supercell_atom_index(1, 0, 0, 0, 4, (2, 1, 1)) == 1
-        @test supercell_atom_index(1, 1, 0, 0, 4, (2, 1, 1)) == 5
-        @test supercell_atom_index(3, 1, 0, 0, 4, (2, 1, 1)) == 7
-
-        # repeat=(2,2,2): 32 atoms
-        n = supercell_atom_index(1, 1, 1, 1, 4, (2, 2, 2))
-        @test 1 ≤ n ≤ 32
-
-        # out-of-range tile → error
-        @test_throws ArgumentError supercell_atom_index(1, 2, 0, 0, 4, (2, 1, 1))
-        # out-of-range base_atom → error
-        @test_throws ArgumentError supercell_atom_index(5, 0, 0, 0, 4, (2, 1, 1))
-    end
+    # NOTE: the former tile-major `supercell_atom_index` testset was removed with
+    # the folded path (Phase 2). Atom numbering is now primitive cell-major and
+    # produced by SupercellCommon._enumerate_cells; its placement is covered by
+    # the supercell-matrix and parity testsets.
 
     # -----------------------------------------------------------------------
     @testset "_min_image_frac" begin

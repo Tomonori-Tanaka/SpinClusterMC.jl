@@ -25,12 +25,12 @@ unit columns. Supported forms:
 | `Symbol :ferromagnetic` | all spins aligned with `+ẑ` |
 | `Tuple` `(sx, sy, sz)` | every atom aligned with the given direction |
 | `AbstractVector{<:Real}` (length 3) | same as Tuple |
-| `AbstractMatrix{<:Real}` `(3, base_n_atoms)` | tile across the supercell |
-| `AbstractMatrix{<:Real}` `(3, n_atoms)` | already supercell-shaped, use as-is |
+| `AbstractMatrix{<:Real}` `(3, n_atoms)` | full supercell config, used as-is |
 
-When `n_atoms == base_n_atoms` (e.g., `repeat = (1, 1, 1)`) the as-is path
-takes precedence; this is unambiguous because both interpretations produce
-the same result in that case (one tile = the whole supercell).
+Only a full `(3, n_atoms)` matrix is accepted (in the supercell's primitive
+cell-major atom order). Base-cell tiling (a `(3, base_n_atoms)` pattern) is no
+longer supported because the un-fold numbering is primitive cell-major (Phase 2);
+use `:random` or a full config instead.
 
 `init_spins(params::AbstractDict, n_atoms, base_n_atoms; rng)` reads
 `params[:initial_spins]` and delegates, defaulting to `:random` when absent.
@@ -126,28 +126,6 @@ function _random_unit_spins(rng::AbstractRNG, n_atoms::Int)::Matrix{Float64}
         spins[3, i] = s[3]
     end
     return spins
-end
-
-# Tile a 3×base matrix across the supercell. Supercell atom `ia` maps to base
-# atom `((ia - 1) % base_n_atoms) + 1`, matching the convention used by
-# `_supercell_atom_index` (atoms are laid out in tile-major order).
-function _tile_base_matrix(
-        base_spins::AbstractMatrix{<:Real}, n_atoms::Int, base_n_atoms::Int
-)::Matrix{Float64}
-    out = Matrix{Float64}(undef, 3, n_atoms)
-    @inbounds for ia in 1:n_atoms
-        ib = ((ia - 1) % base_n_atoms) + 1
-        v = SVector{3, Float64}(
-            Float64(base_spins[1, ib]),
-            Float64(base_spins[2, ib]),
-            Float64(base_spins[3, ib])
-        )
-        d = _normalize_direction(v)
-        out[1, ia] = d[1]
-        out[2, ia] = d[2]
-        out[3, ia] = d[3]
-    end
-    return out
 end
 
 function _normalize_supercell_matrix(

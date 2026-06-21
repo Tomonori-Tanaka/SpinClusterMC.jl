@@ -11,8 +11,8 @@ only the Simple-specific pieces: the `ClusterTemplate` type, `build_templates`
 `_generate_instances_matrix` (which emits Simple `ClusterInstance`s for a general
 supercell matrix `M`).
 
-The diagonal `repeat` API keeps using the unchanged `_generate_instances`
-(legacy, bit-exact). This `supercell_matrix` path is the general one.
+Both the diagonal `repeat` API (sugar for `M = reshape_base * diag(repeat)`) and
+the explicit `supercell_matrix` API funnel through this un-fold path (Phase 2).
 """
 
 using StaticArrays: SMatrix
@@ -78,7 +78,7 @@ one template per `(SALC, basis)`.
 Each site's pivot-relative `(sublattice, offset)` comes from
 `SupercellCommon._cluster_offsets`. No base-cell translation loop is needed: the
 supercell tiling (`_generate_instances_matrix`) regenerates the copies that the
-diagonal `_generate_instances` produces by enumerating translations.
+diagonal `_generate_instances_matrix` produces by enumerating translations.
 
 **Self-overlap correction.** The XML `multiplicity` folds in the cluster's
 self-overlap under the base cell: a half-period ("face") pair whose `±Δ` images
@@ -96,7 +96,7 @@ differs from the folded diagonal `repeat` path and is the geometrically faithful
 one (see `docs/specs/260620-general-supercell`).
 
 `jphi_threshold` skips SALCs with `|J_s| < jphi_threshold` exactly as
-`_generate_instances` does (`0.0` keeps every SALC).
+`_generate_instances_matrix` does (`0.0` keeps every SALC).
 """
 function build_templates(
         salcs::AbstractVector{SALCData},
