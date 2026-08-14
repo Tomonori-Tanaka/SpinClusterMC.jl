@@ -6,9 +6,11 @@ Spin proposals and initial-spin generation for the Simple submodule.
 - `_rand_unit_spin(rng)` — uniform unit vector on the sphere (Marsaglia /
   z-then-azimuth method). Use as an i.i.d. proposal for Metropolis or as a
   fallback when a geodesic step degenerates.
-- `_propose_spin_geodesic(rng, u, theta_max)` — small-angle rotation of `u`
-  by `θ ∈ [-theta_max, theta_max]` in a uniformly-chosen tangent direction.
-  Standard local proposal whose acceptance rate is tunable via `theta_max`.
+- `_propose_spin_geodesic(rng, u, theta_max)` — rotation of `u` by `θ` in a
+  uniformly-chosen tangent direction, with `cos θ ~ U(cos theta_max, 1)` so
+  the result is uniform on the spherical cap of half-angle `theta_max`.
+  Standard local proposal whose acceptance rate is tunable via `theta_max`;
+  `theta_max = π` recovers the uniform-sphere proposal exactly.
 
 Both return `SVector{3, Float64}` so they compose with the rest of the
 energy code without intermediate allocations.
@@ -74,10 +76,28 @@ end
     _propose_spin_geodesic(rng, u, theta_max) -> SVector{3, Float64}
 
 Propose `u' = cos(θ) u + sin(θ) t` with `t` a random unit tangent at `u`
-and `θ ∈ [-theta_max, theta_max]`. `theta_max` is in **radians** (e.g.,
-`0.3` rad ≈ 17°, `π` rad gives near-uniform-sphere proposals). For
-moderate `theta_max` (~0.3 rad) the Metropolis acceptance is much higher
-than i.i.d. uniform spins because the local-energy change is small.
+and `cos(θ) ∈ U[cos(theta_max), 1]`, so `u'` is **uniform on the spherical
+cap** of half-angle `theta_max` about `u`. `theta_max` is in **radians**
+(e.g., `0.3` rad ≈ 17°); at `theta_max = π` the cap is all of `S²` and the
+proposal reduces, in distribution, to `_rand_unit_spin`. For moderate
+`theta_max` (~0.3 rad) the Metropolis acceptance is much higher than i.i.d.
+uniform spins because the local-energy change is small.
+
+`theta_max` must lie in `[0, π]` — the `SCEMC` constructor gates
+`params[:spin_theta_max]` accordingly. Only `cos(theta_max)` enters, so a
+larger value would silently *shrink* the cap rather than widen it.
+
+The proposal is symmetric: `u ∈ cap(u', theta_max)` exactly when
+`u' ∈ cap(u, theta_max)`, and the density is the same both ways, so plain
+Metropolis (`min(1, exp(-ΔE/T))`, no Hastings ratio) satisfies detailed
+balance.
+
+Drawing `θ` uniformly on `[-theta_max, theta_max]` instead — the behavior
+before 2026-08 — induces a `1/sin θ` density on the sphere. `theta_max = π`
+was therefore *not* a uniform-sphere proposal: it kept `P(|θ| < ε) = ε/π`
+of near-zero-angle moves, so acceptance never collapsed at low temperature
+even at the widest setting, which defeats any user-side tuning that reads
+acceptance (or a proxy for it) to size the step.
 
 If the random tangent happens to be (numerically) parallel to `u` the step
 falls back to a uniform-sphere sample. The `theta_max == 0` case is
@@ -94,8 +114,17 @@ short-circuited *before* that fallback so it always returns `u` unchanged.
         return _rand_unit_spin(rng)
     end
     t = t_unnorm / nrm
-    θ = Float64(theta_max) * (2.0 * rand(rng) - 1.0)
-    return cos(θ) * u + sin(θ) * t
+    # cos θ ~ U(cos theta_max, 1) is what makes u' uniform on the cap. Restricting
+    # to θ ≥ 0 costs no coverage because `t` is isotropic, so `-t` is drawn just as
+    # often. The versine `1 - cos theta_max = 2 sin²(theta_max/2)` and
+    # `sin θ = sqrt(d (2 - d))` with `d = 1 - cos θ` are the cancellation-free forms:
+    # the naive `1 - cos(x)` / `sqrt(1 - c²)` lose most of their significant digits
+    # as `theta_max → 0`, which is exactly the small-step regime this proposal is for.
+    sh = sin(0.5 * Float64(theta_max))
+    d = rand(rng) * (2.0 * sh * sh)
+    c = 1.0 - d
+    s = sqrt(d * (2.0 - d))
+    return c * u + s * t
 end
 
 # Initial spins ------------------------------------------------------------

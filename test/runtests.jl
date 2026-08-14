@@ -325,6 +325,9 @@ end
 
     include("bcc_2x2x2/test_bcc_2x2x2.jl")
 
+    # Proposal distribution + acceptance counters, both backends at once.
+    include("test_proposal_and_acceptance.jl")
+
     # Simple submodule tests (independent reference implementation).
     include("simple/test_simple_xml.jl")
     include("simple/test_simple_cg.jl")

@@ -25,11 +25,15 @@ Perform `mc.h.n_atoms` Metropolis flip attempts on `mc.spins`. On each
 accepted move `mc.energy` is incremented by `ΔE` so the running total stays
 in sync without a full recomputation; the periodic drift check in
 `Carlo.sweep!` reconciles round-off accumulation.
+
+The `mc.n_accepted` / `mc.n_proposed` tallies are advanced here — exactly
+`n_atoms` proposals per sweep — and surfaced by `acceptance_rate(mc)`.
 """
 function metropolis_sweep!(mc::SCEMC, ctx::Carlo.MCContext)
     n = mc.h.n_atoms
     theta_max = mc.theta_max
     rng = ctx.rng
+    n_accepted = 0
     @inbounds for _ in 1:n
         i = rand(rng, 1:n)
         S_old = SVector{3, Float64}(mc.spins[1, i], mc.spins[2, i], mc.spins[3, i])
@@ -48,7 +52,12 @@ function metropolis_sweep!(mc::SCEMC, ctx::Carlo.MCContext)
             mc.spins[2, i] = S_new[2]
             mc.spins[3, i] = S_new[3]
             mc.energy += ΔE
+            n_accepted += 1
         end
     end
+    # Accumulated in a local and folded in once, so the tally costs nothing in
+    # the flip loop (the struct field would be reloaded on every iteration).
+    mc.n_accepted += n_accepted
+    mc.n_proposed += n
     return nothing
 end

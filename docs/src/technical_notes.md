@@ -29,7 +29,7 @@ To convert from Kelvin: $T = k_B T_\text{K}$ with $k_B = 8.617333262 \times 10^{
 
 Two proposal types are supported, selected by `params[:spin_theta_max]`:
 
-### Uniform (default)
+### Uniform (default in the optimized backend)
 
 When `spin_theta_max` is absent, the new spin $\hat{e}'$ is drawn uniformly on $S^2$:
 
@@ -38,20 +38,42 @@ $$\hat{e}' \sim \text{Uniform}(S^2)$$
 This is ergodic at any temperature but yields low acceptance at low $T$ because most proposals
 are far from the current spin.
 
-### Geodesic (local)
+### Cap-uniform (local)
 
-When `spin_theta_max = θ_\text{max} > 0`, a random unit tangent $\hat{t}$ at the current spin $\hat{e}$
-is drawn (Gram–Schmidt orthogonalization of a Gaussian random vector), and the new spin is
+When `spin_theta_max = θ_\text{max} \in (0, π]`, a random unit tangent $\hat{t}$ at the current
+spin $\hat{e}$ is drawn (Gram–Schmidt orthogonalization of a Gaussian random vector), and the new
+spin is
 
-$$\hat{e}' = \cos\theta\, \hat{e} + \sin\theta\, \hat{t}, \qquad \theta \sim \text{Uniform}[-\theta_\text{max}, \theta_\text{max}].$$
+$$\hat{e}' = \cos\theta\, \hat{e} + \sin\theta\, \hat{t}, \qquad \cos\theta \sim \text{Uniform}[\cos\theta_\text{max}, 1].$$
 
-This keeps the proposed spin within a geodesic cone of half-angle $\theta_\text{max}$, yielding
-much higher acceptance at low temperature.
-The proposal is symmetric ($q(\hat{e}'|\hat{e}) = q(\hat{e}|\hat{e}')$), so detailed balance holds.
+Sampling $\cos\theta$ — not $\theta$ — uniformly is what makes $\hat{e}'$ **uniform on the
+spherical cap** of half-angle $\theta_\text{max}$ about $\hat{e}$: the ring of points at geodesic
+distance $\theta$ has circumference $2\pi\sin\theta$, so a uniform density on the cap requires
+$p(\theta) \propto \sin\theta$.
+
+The proposal is symmetric ($q(\hat{e}'|\hat{e}) = q(\hat{e}|\hat{e}')$, since both are the uniform
+density on a cap of the same half-angle and $\hat{e} \in \text{cap}(\hat{e}')$ exactly when
+$\hat{e}' \in \text{cap}(\hat{e})$), so plain Metropolis satisfies detailed balance with no
+Hastings correction.
+
+At $\theta_\text{max} = π$ the cap is the whole sphere, so this reduces exactly to the uniform
+proposal above; the two differ only in how much of the RNG stream they consume. Values above $π$
+are rejected — only $\cos\theta_\text{max}$ enters, so they would *shrink* the cap.
 
 **Choosing $\theta_\text{max}$**: a value around $0.3$–$0.5$ rad typically gives acceptance rates
 of 50–80 % near room temperature for typical SCE models. For high-temperature runs
-($T \gg |J|$), uniform proposals are equally effective.
+($T \gg |J|$), uniform proposals are equally effective. Tune against the measured
+`AcceptanceRate` observable (or `acceptance_rate(mc)`) rather than a proxy.
+
+!!! warning "Changed in 2026-08"
+    Earlier versions drew $\theta \sim \text{Uniform}[-\theta_\text{max}, \theta_\text{max}]$,
+    which induces a $1/\sin\theta$ density on the sphere. `spin_theta_max = π` was therefore
+    **not** the uniform-sphere proposal, and a fraction $P(|\theta| < \varepsilon) = \varepsilon/π$
+    of near-zero-angle moves survived at *every* $\theta_\text{max}$ — so acceptance never
+    collapsed even at the widest setting, and any step-size tuner driven by acceptance ran
+    open-loop against the ceiling. Both proposals are symmetric, so no past result is biased;
+    but the chains differ, and pre- and post-change runs are not bitwise comparable and have
+    different autocorrelation times.
 
 ## Energy evaluation
 
@@ -107,6 +129,7 @@ Each Carlo `measure!` call records the following from the current spin state:
 | `AbsMagnetization` | same as `Magnetization` |
 | `Magnetization2` | $\|\bar{\mathbf{m}}\|^2$ |
 | `Magnetization4` | $\|\bar{\mathbf{m}}\|^4$ |
+| `AcceptanceRate` | Accepted / proposed Metropolis moves since the previous `measure!`. Each sweep contributes exactly $N$ proposals. |
 
 Derived quantities (registered via `Carlo.register_evaluables`):
 

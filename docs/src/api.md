@@ -16,6 +16,12 @@ SCEHamiltonian
 JPhiSpinMC
 ```
 
+### Acceptance diagnostics
+```@docs
+acceptance_rate
+reset_acceptance!
+```
+
 ## Loading and Energy Evaluation
 
 ### load_sce_hamiltonian
@@ -106,4 +112,6 @@ init_spins
 
 ```@docs
 SCEMC
+acceptance_rate
+reset_acceptance!
 ```

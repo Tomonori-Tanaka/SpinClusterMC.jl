@@ -31,7 +31,7 @@ for the wider convention.
 | `:supercell_matrix` | `nothing` | 3×3 integer matrix for a general (non-diagonal / non-base-multiple) supercell of the primitive cell. Mutually exclusive with `:repeat`. See `SpinClusterHamiltonian`. |
 | `:jphi_threshold` | `0.0` | Drop SALCs with `|J_s| < jphi_threshold` (eV). Use with sparse-modeled `jphi.xml`. See `SpinClusterHamiltonian`. |
 | `:external` | `nothing` | An `ExternalTerm` (`Zeeman`, …) added on top of the SCE energy. |
-| `:spin_theta_max` | `π` | Geodesic proposal half-width **in radians**; `π` ≈ uniform-sphere proposals, smaller values give finer local moves. |
+| `:spin_theta_max` | `π` | Geodesic proposal half-angle **in radians**, in `[0, π]`. The proposal is uniform on the spherical cap of that half-angle, so `π` *is* the uniform-sphere proposal and smaller values give finer local moves. |
 | `:renorm_every` | `1000` | Sweep cadence for spin renormalization and energy drift check. |
 | `:update_scheme` | `:metropolis` | Update algorithm; only `:metropolis` in v1. |
 | `:initial_spins` | `:random` | Initial spin spec; see `init_spins`. |
@@ -47,6 +47,9 @@ for the wider convention.
   `|m|, |m|, |m|², |m|⁴` with `m = (1/n) Σ_i S_i`. `S_i` is the unit-spin
   direction, so `|m| ∈ [0, 1]` is a dimensionless order parameter and does
   not include site-resolved moment magnitudes (those live in `MomentModel`).
+- `:AcceptanceRate` — Metropolis acceptance over the sweeps since the previous
+  `measure!`. This is the quantity `:spin_theta_max` tunes; see
+  [`acceptance_rate`](@ref) for reading it from a hand-driven sweep loop.
 
 `register_evaluables` adds the standard derived quantities:
 
@@ -92,9 +95,14 @@ temperature unit convention.
 - `energy::Float64` — running total (SCE + external) tracked incrementally by
   `ΔE` on accepted moves; periodically reconciled by the drift check.
 - `external::E` — `Nothing` or an `ExternalTerm` (`Union{Nothing, ExternalTerm}`).
-- `theta_max::Float64` — geodesic proposal half-width.
+- `theta_max::Float64` — half-angle of the spherical cap each proposal is drawn
+  uniformly from, in `[0, π]`.
 - `renorm_every::Int` — cadence for spin renormalization and drift check.
 - `sweep_count::Int` — number of completed sweeps (used by the cadence).
+- `n_accepted::Int`, `n_proposed::Int` — Metropolis accept / propose tallies for
+  the current acceptance window. Read them via [`acceptance_rate`](@ref) rather
+  than directly; `Carlo.measure!` closes the window each time it records
+  `:AcceptanceRate`, and [`reset_acceptance!`](@ref) opens a new one.
 - `extra_measure::Function`, `extra_evaluables::Function` — user hooks.
 
 # PT-future-work fields (not used in v1)
@@ -119,6 +127,8 @@ mutable struct SCEMC{E <: Union{Nothing, ExternalTerm}} <: Carlo.AbstractMC
     theta_max::Float64
     renorm_every::Int
     sweep_count::Int
+    n_accepted::Int
+    n_proposed::Int
     extra_measure::Function
     extra_evaluables::Function
     # PT-future-work fields (not used in v1; kept for serialize round-trip).
@@ -224,6 +234,15 @@ function SCEMC(params::AbstractDict)
         )
     end
     theta_max = Float64(get(params, :spin_theta_max, π))
+    # Only `cos(theta_max)` enters the cap-uniform proposal, so a value past π
+    # would silently shrink the cap instead of widening it. π is the widest
+    # meaningful setting (the whole sphere); reject anything beyond it loudly.
+    0 ≤ theta_max ≤ π || throw(
+        ArgumentError(
+        "SCEMC: params[:spin_theta_max] must lie in [0, π]; got $theta_max. " *
+        "π already proposes uniformly over the whole sphere."
+    )
+    )
     renorm_every = Int(get(params, :renorm_every, 1000))
     extra_measure = get(params, :extra_measure, _no_extra_measure)
     extra_evaluables = get(params, :extra_evaluables, _no_extra_evaluables)
@@ -245,12 +264,54 @@ function SCEMC(params::AbstractDict)
         theta_max,
         renorm_every,
         0,                  # sweep_count
+        0,                  # n_accepted
+        0,                  # n_proposed
         extra_measure,
         extra_evaluables,
         xml_path,
         h.repeat,           # (0,0,0) sentinel when built via supercell_matrix
         supercell_matrix
     )
+end
+
+"""
+    acceptance_rate(mc::SCEMC) -> Float64
+
+Fraction of Metropolis proposals accepted in the current acceptance window,
+`mc.n_accepted / mc.n_proposed`.
+
+The window opens at `Carlo.init!` or at the last [`reset_acceptance!`](@ref) /
+`Carlo.measure!`, and every sweep contributes exactly `n_atoms` proposals. This
+is the quantity `params[:spin_theta_max]` tunes, so an adaptive step-size loop
+should read it here rather than reconstruct it from a proxy:
+
+```julia
+for _ in 1:n_tune
+    reset_acceptance!(mc)
+    Carlo.sweep!(mc, ctx)
+    mc.theta_max = clamp(mc.theta_max * (acceptance_rate(mc) > 0.5 ? 1.15 : 0.87), 1e-3, π)
+end
+```
+
+Returns `NaN` when no proposal has been made since the window opened — the
+honest value for an undefined ratio, and loud enough that a tuning loop reading
+it cannot mistake it for a plausible rate.
+"""
+function acceptance_rate(mc::SCEMC)::Float64
+    return mc.n_proposed == 0 ? NaN : mc.n_accepted / mc.n_proposed
+end
+
+"""
+    reset_acceptance!(mc::SCEMC)
+
+Zero the accept / propose tallies, opening a new [`acceptance_rate`](@ref)
+window. `Carlo.measure!` already does this after recording `:AcceptanceRate`;
+call it explicitly when driving `Carlo.sweep!` yourself.
+"""
+function reset_acceptance!(mc::SCEMC)
+    mc.n_accepted = 0
+    mc.n_proposed = 0
+    return nothing
 end
 
 # Dispatch helpers that fold the optional `external` field into the SCE
@@ -318,6 +379,7 @@ function Carlo.init!(mc::SCEMC, ctx::Carlo.MCContext, params::AbstractDict)
     end
     mc.energy = _full_energy(mc)
     mc.sweep_count = 0
+    reset_acceptance!(mc)
     return nothing
 end
 
@@ -335,9 +397,13 @@ end
 """
     Carlo.measure!(mc::SCEMC, ctx)
 
-Record the per-atom energy moments and the dimensionless mean-spin order
-parameter, then dispatch the user `extra_measure` callback for any
-application-specific observables.
+Record the per-atom energy moments, the dimensionless mean-spin order
+parameter, and the Metropolis acceptance rate, then dispatch the user
+`extra_measure` callback for any application-specific observables.
+
+`:AcceptanceRate` covers the sweeps since the previous `measure!` (see
+[`acceptance_rate`](@ref)); the window is closed *after* `extra_measure` runs,
+so a callback sees the same tallies that were just recorded.
 """
 function Carlo.measure!(mc::SCEMC, ctx::Carlo.MCContext)
     n = mc.h.n_atoms
@@ -363,8 +429,10 @@ function Carlo.measure!(mc::SCEMC, ctx::Carlo.MCContext)
     measure!(ctx, :AbsMagnetization, mag)
     measure!(ctx, :Magnetization2, mag2)
     measure!(ctx, :Magnetization4, mag2 * mag2)
+    measure!(ctx, :AcceptanceRate, acceptance_rate(mc))
 
     mc.extra_measure(mc, ctx)
+    reset_acceptance!(mc)
     return nothing
 end
 

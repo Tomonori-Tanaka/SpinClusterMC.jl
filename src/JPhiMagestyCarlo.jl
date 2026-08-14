@@ -6,7 +6,10 @@ in spin directions with the same contract as `Magesty.Optimize.design_matrix_ene
 provides a thin [`Carlo`](https://github.com/lattice-quantum/Carlo.jl) `AbstractMC` adapter with
 single-spin Metropolis updates. Local energy deltas reuse preallocated stride / index buffers (no
 per-update `Vector` allocations in the tensor contraction). Optional task parameter `spin_theta_max`
-selects a local geodesic spin proposal instead of i.i.d. uniform-on-sphere draws.
+selects a local spin proposal — uniform on the spherical cap of that half-angle about the current
+spin — instead of i.i.d. uniform-on-sphere draws; `spin_theta_max = π` is the uniform-sphere draw.
+`acceptance_rate(mc)` and the `:AcceptanceRate` observable report the Metropolis acceptance that
+`spin_theta_max` tunes.
 
 Real (tesseral) spherical harmonics use `SpheriCart.SphericalHarmonics` with its default
 `:L2` (L2-orthonormal) normalization, which is bit-exact with Magesty's `Zₗₘ_unsafe` for
@@ -34,7 +37,9 @@ using ..SupercellCommon: PrimitiveCell, extract_primitive, _int_det3, _adjugate3
 export SCEHamiltonian,
     load_sce_hamiltonian,
     sce_energy,
-    JPhiSpinMC
+    JPhiSpinMC,
+    acceptance_rate,
+    reset_acceptance!
 
 include("xml_io.jl")
 
@@ -680,7 +685,17 @@ Carlo.start(Carlo.SingleScheduler, job)
 ## Spin proposal
 | Key | Type | Default | Description |
 |:----|:-----|:--------|:------------|
-| `:spin_theta_max` | `Float64 > 0` | `nothing` | If set, each Metropolis proposal is drawn geodesically within a cone of half-angle `θ_max` (radians) around the current spin. This typically yields higher acceptance at low temperatures. If absent, proposals are drawn uniformly on the sphere. |
+| `:spin_theta_max` | `Float64` in `(0, π]` | `nothing` | If set, each Metropolis proposal is drawn **uniformly on the spherical cap** of half-angle `θ_max` (radians) about the current spin — `cos θ ~ U(cos θ_max, 1)`. This typically yields higher acceptance at low temperatures. If absent, proposals are drawn uniformly on the whole sphere, which `θ_max = π` reproduces exactly (in distribution; the two consume different amounts of the RNG stream). Values above `π` are rejected: only `cos θ_max` enters, so they would *shrink* the cap. |
+
+!!! note "Proposal distribution changed in 2026-08"
+    `θ_max` previously selected `θ ~ U(-θ_max, θ_max)`, which puts a `1/sin θ`
+    density on the sphere rather than a uniform one — `θ_max = π` was *not* the
+    uniform-sphere proposal, and a finite fraction `P(|θ| < ε) = ε/π` of
+    near-zero-angle moves survived at every setting, so acceptance never
+    collapsed even at the widest `θ_max`. Chains are unbiased under either
+    choice (both proposals are symmetric, so detailed balance holds), but they
+    are different chains: runs from before and after this change are not
+    bitwise comparable and have different autocorrelation times.
 
 ## Numerical stability
 | Key | Type | Default | Description |
@@ -719,6 +734,7 @@ Every sweep records the following observables in the Carlo accumulator:
 | `:AbsMagnetization` | Same as `:Magnetization`. |
 | `:Magnetization2` | `|⟨S⟩|²`. |
 | `:Magnetization4` | `|⟨S⟩|⁴`. |
+| `:AcceptanceRate` | Metropolis acceptance over the sweeps since the previous measurement. See [`acceptance_rate`](@ref). |
 
 Derived quantities registered via `Carlo.register_evaluables`:
 
@@ -752,12 +768,18 @@ mutable struct JPhiSpinMC{S<:SphericalHarmonics} <: AbstractMC
     # (strides and dims are now precomputed in ClusterInstance)
     contract_other_sites::Vector{Int}
     contract_cart_idx::Vector{Int}
-    # `nothing`: uniform random unit spin (legacy). `θ>0`: geodesic proposal with angle
-    # uniform in `[-θ, θ]` around current spin (often higher acceptance at low T).
+    # `nothing`: uniform random unit spin. `0 < θ ≤ π`: proposal uniform on the spherical
+    # cap of half-angle θ around the current spin (higher acceptance at low T). The two
+    # agree in distribution at θ = π — they differ only in how much RNG stream they eat.
     spin_theta_max::Union{Nothing,Float64}
     # Renormalize all spins (and rebuild zlm cache) every this many sweeps. 0 = disabled.
     renorm_every::Int
     sweep_count::Int
+    # Metropolis accept / propose tallies for the current acceptance window; read via
+    # `acceptance_rate(mc)`, reset by `reset_acceptance!(mc)` and by `Carlo.measure!`
+    # once it has recorded `:AcceptanceRate`.
+    n_accepted::Int
+    n_proposed::Int
     # Reconstruction keys stored for lightweight MPI serialization (Carlo PT gather).
     # ham and local_cache are deterministically derived from these, so they are
     # excluded from the serialized representation to avoid OOM on the root rank.
@@ -831,6 +853,12 @@ function JPhiSpinMC(params::AbstractDict)
     spin_theta_max = if haskey(params, :spin_theta_max)
         θ = Float64(params[:spin_theta_max])
         θ > 0.0 || throw(ArgumentError("spin_theta_max must be positive, got $θ"))
+        # Only `cos(θ)` enters the cap-uniform proposal, so a value past π would
+        # silently shrink the cap instead of widening it. π is the widest
+        # meaningful setting (the whole sphere); reject anything beyond it loudly.
+        θ ≤ π || throw(ArgumentError(
+            "spin_theta_max must be ≤ π, got $θ; π already proposes uniformly " *
+            "over the whole sphere (equivalent to omitting spin_theta_max)"))
         θ
     else
         nothing
@@ -887,7 +915,7 @@ function JPhiSpinMC(params::AbstractDict)
             active_body_indices, Int[], [Int[] for _ in 1:n],
             max_l, zlm_cache, zlm_row_buf, sph,
             other_sites_buf, cart_idx_buf,
-            spin_theta_max, renorm_every, 0,
+            spin_theta_max, renorm_every, 0, 0, 0,
             xml, rep, scm, thr, enabled_bodies, energy_kernel,
             local_template, atoms_buf,
         )
@@ -919,7 +947,9 @@ function JPhiSpinMC(params::AbstractDict)
         cart_idx_work,
         spin_theta_max,
         renorm_every,
-        0,
+        0,      # sweep_count
+        0,      # n_accepted
+        0,      # n_proposed
         xml,
         rep,
         scm,
@@ -1290,12 +1320,16 @@ function Carlo.init!(mc::JPhiSpinMC, ctx::MCContext, params::AbstractDict)
             mc.zlm_cache,
         )
     end
+    reset_acceptance!(mc)
     return nothing
 end
 
 function Carlo.sweep!(mc::JPhiSpinMC, ctx::MCContext)
     n = mc.ham.n_atoms
     use_template = mc.energy_kernel === :tensor_template
+    # Accumulated in a local and folded in after the loop, so the tally costs
+    # nothing on the flip hot path (the struct field would reload every iteration).
+    n_accepted = 0
     @inbounds for _ in 1:n
         i = rand(ctx.rng, 1:n)
 
@@ -1352,6 +1386,7 @@ function Carlo.sweep!(mc::JPhiSpinMC, ctx::MCContext)
         dE = E_new_local - E_old_local
         if dE <= 0.0 || rand(ctx.rng) < exp(-dE / mc.T)
             mc.energy += dE
+            n_accepted += 1
         else
             mc.spins[i] = s_old
             @inbounds for j in 1:ncols
@@ -1359,6 +1394,8 @@ function Carlo.sweep!(mc::JPhiSpinMC, ctx::MCContext)
             end
         end
     end
+    mc.n_accepted += n_accepted
+    mc.n_proposed += n
     mc.sweep_count += 1
     if mc.renorm_every > 0 && mc.sweep_count % mc.renorm_every == 0
         @inbounds for i in 1:n
@@ -1382,6 +1419,8 @@ function Carlo.measure!(mc::JPhiSpinMC, ctx::MCContext)
     measure!(ctx, :AbsMagnetization, mag)
     measure!(ctx, :Magnetization2, mag2)
     measure!(ctx, :Magnetization4, mag2^2)
+    measure!(ctx, :AcceptanceRate, acceptance_rate(mc))
+    reset_acceptance!(mc)
     return nothing
 end
 
@@ -1389,7 +1428,53 @@ function Carlo.measure!(mc::JPhiSpinMC, ctx::MCContext, comm::MPI.Comm)
     # In parallel run mode, only rank 0 is allowed to record measurements.
     if MPI.Comm_rank(comm) == 0
         Carlo.measure!(mc, ctx)
+    else
+        # Close the acceptance window on the other ranks too, so that
+        # `acceptance_rate(mc)` means "since the previous measurement" everywhere
+        # rather than "since init!" off rank 0.
+        reset_acceptance!(mc)
     end
+    return nothing
+end
+
+"""
+    acceptance_rate(mc::JPhiSpinMC) -> Float64
+
+Fraction of Metropolis proposals accepted in the current acceptance window,
+`mc.n_accepted / mc.n_proposed`.
+
+The window opens at `Carlo.init!` or at the last [`reset_acceptance!`](@ref) /
+`Carlo.measure!`, and every sweep contributes exactly `n_atoms` proposals. This
+is the quantity `params[:spin_theta_max]` tunes, so an adaptive step-size loop
+should read it here rather than reconstruct it from a proxy:
+
+```julia
+for _ in 1:n_tune
+    reset_acceptance!(mc)
+    Carlo.sweep!(mc, ctx)
+    mc.spin_theta_max = clamp(
+        mc.spin_theta_max * (acceptance_rate(mc) > 0.5 ? 1.15 : 0.87), 1e-3, π)
+end
+```
+
+Returns `NaN` when no proposal has been made since the window opened — the
+honest value for an undefined ratio, and loud enough that a tuning loop reading
+it cannot mistake it for a plausible rate.
+"""
+function acceptance_rate(mc::JPhiSpinMC)::Float64
+    return mc.n_proposed == 0 ? NaN : mc.n_accepted / mc.n_proposed
+end
+
+"""
+    reset_acceptance!(mc::JPhiSpinMC)
+
+Zero the accept / propose tallies, opening a new [`acceptance_rate`](@ref)
+window. `Carlo.measure!` already does this after recording `:AcceptanceRate`;
+call it explicitly when driving `Carlo.sweep!` yourself.
+"""
+function reset_acceptance!(mc::JPhiSpinMC)
+    mc.n_accepted = 0
+    mc.n_proposed = 0
     return nothing
 end
 
@@ -1451,6 +1536,10 @@ function Serialization.serialize(s::Serialization.AbstractSerializer, mc::JPhiSp
     Serialization.serialize(s, mc.spin_theta_max)
     Serialization.serialize(s, mc.renorm_every)
     Serialization.serialize(s, mc.sweep_count)
+    # Carried so a PT gather mid-window does not silently zero a partial
+    # acceptance tally; they are diagnostics, not part of the chain state.
+    Serialization.serialize(s, mc.n_accepted)
+    Serialization.serialize(s, mc.n_proposed)
     Serialization.serialize(s, mc.enabled_bodies)
     Serialization.serialize(s, mc.energy_kernel)
 end
@@ -1469,6 +1558,8 @@ function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{<
     spin_theta_max = Serialization.deserialize(s)
     renorm_every = Serialization.deserialize(s)::Int
     sweep_count  = Serialization.deserialize(s)::Int
+    n_accepted   = Serialization.deserialize(s)::Int
+    n_proposed   = Serialization.deserialize(s)::Int
     enabled_bodies = Serialization.deserialize(s)::Union{Nothing,Vector{Int}}
     energy_kernel = Serialization.deserialize(s)::Symbol
 
@@ -1495,7 +1586,7 @@ function Serialization.deserialize(s::Serialization.AbstractSerializer, ::Type{<
         derived.active_body_indices, derived.active_instance_indices, derived.related_instances_by_atom,
         derived.max_l, zlm_cache, zlm_row_buf, sph,
         Vector{Int}(undef, derived.max_sites), Vector{Int}(undef, derived.max_sites),
-        spin_theta_max, renorm_every, sweep_count,
+        spin_theta_max, renorm_every, sweep_count, n_accepted, n_proposed,
         xml_path, repeat, supercell_matrix, jphi_threshold, enabled_bodies,
         energy_kernel, local_template, atoms_buf,
     )

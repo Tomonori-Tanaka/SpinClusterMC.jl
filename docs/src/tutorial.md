@@ -25,7 +25,7 @@ tm.seed           = 1234
 tm.sweeps         = 100_000   # measurement sweeps
 tm.thermalization = 5_000     # equilibration sweeps (excluded from measurements)
 tm.binsize        = 50        # bin length for autocorrelation error estimation
-tm.spin_theta_max = 0.5       # geodesic proposal half-angle (radians)
+tm.spin_theta_max = 0.5       # proposal cap half-angle (radians), ≤ π
 tm.supercell      = (2, 2, 2) # tile the primitive XML cell to 8× more atoms
 tm.xml_path       = "path/to/jphi.xml"
 
@@ -182,3 +182,29 @@ cv_err = getfield.(df.SpecificHeat[1], :err)
 | `Magnetization` | Vector magnetization magnitude $|\langle \mathbf{S} \rangle|$ |
 | `Susceptibility` | $N \langle m^2 \rangle / T$ |
 | `BinderRatio` | $\langle m^2 \rangle^2 / \langle m^4 \rangle$ |
+| `AcceptanceRate` | Metropolis acceptance since the previous measurement — the quantity `spin_theta_max` tunes |
+
+### Tuning the proposal step size
+
+`spin_theta_max` is the half-angle of the spherical cap each proposal is drawn
+uniformly from: small values propose small moves that are usually accepted, and
+`π` proposes over the whole sphere. Rules of thumb put the useful band at
+30–60 % acceptance; `0.3`–`0.5` rad is a reasonable starting point near room
+temperature, but the right value depends on `T` and on the model, so measure it.
+
+Read `df.AcceptanceRate` from a finished run, or call `acceptance_rate(mc)`
+between sweeps when driving the engine yourself:
+
+```julia
+for _ in 1:n_tune
+    reset_acceptance!(mc)
+    Carlo.sweep!(mc, ctx)
+    a = acceptance_rate(mc)                      # accepted / proposed
+    mc.spin_theta_max = clamp(mc.spin_theta_max * (a > 0.5 ? 1.15 : 0.87), 1e-3, π)
+end
+```
+
+Do not substitute a proxy such as "fraction of sites whose spin changed this
+sweep": a sweep visits sites at random, so some are never proposed at all, and
+an accepted move can land arbitrarily close to where it started. The tally above
+counts the accept branch itself.

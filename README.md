@@ -40,7 +40,7 @@ tm.seed            = 1234
 tm.sweeps          = 100_000   # measurement sweeps
 tm.thermalization  = 5_000     # equilibration sweeps (not measured)
 tm.binsize         = 50        # bin size for error estimation
-tm.spin_theta_max  = 0.5       # geodesic proposal half-angle (radians); nothing → uniform
+tm.spin_theta_max  = 0.5       # proposal cap half-angle (radians), ≤ π; nothing → uniform
 tm.supercell       = (1, 1, 1) # tile primitive cell; e.g. (2,2,2) → 8× more atoms
 tm.xml_path        = "path/to/jphi.xml"
 
@@ -85,7 +85,7 @@ mpiexec -n <nprocs> julia example_job.jl run   # MPI (tasks run in parallel)
 | `sweeps` | `Int` | Number of measurement sweeps |
 | `thermalization` | `Int` | Equilibration sweeps (excluded from measurements) |
 | `binsize` | `Int` | Bin size for autocorrelation error estimation |
-| `spin_theta_max` | `Float64` or `nothing` | Geodesic proposal half-angle in radians; `nothing` → uniform random spin on full sphere |
+| `spin_theta_max` | `Float64` in `(0, π]`, or `nothing` | Proposal half-angle in radians. The new spin is drawn **uniformly on the spherical cap** of that half-angle about the current one (`cos θ ~ U(cos θ_max, 1)`), so `π` is the full-sphere draw and `nothing` selects that directly. Values above `π` are rejected. Tune it against `AcceptanceRate`. |
 | `supercell` / `repeat` | `Tuple{Int,Int,Int}` | Sugar for `supercell_matrix = reshape_base * diag(n₁,n₂,n₃)`; builds an `(n₁,n₂,n₃)` supercell of the primitive cell via the same un-fold path |
 | `supercell_matrix` | `Matrix{Int}` (3×3) | General integer supercell of the primitive cell (non-diagonal / non-multiple cells). Mutually exclusive with `repeat`/`supercell`. Both optimized kernels (`:tensor` and the default fast `:tensor_template`) handle a general matrix. |
 | `seed` | `Int` | Random seed |

@@ -27,5 +27,6 @@ export total_energy, local_energy, delta_local_energy, gradient
 export ExternalTerm, Zeeman, MomentModel, UniformMoment, PerSiteMoment
 export init_spins
 export SCEMC
+export acceptance_rate, reset_acceptance!
 
 end

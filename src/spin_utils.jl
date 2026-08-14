@@ -168,8 +168,24 @@ end
     _propose_spin_geodesic(rng, ux, uy, uz, theta_max)
 
 Unit-vector proposal `u' = cos(θ) u + sin(θ) t` with `t` a random unit tangent at `u` and
-`θ` uniform in `[-theta_max, theta_max]`. For moderate `theta_max`, moves stay close to the
-current direction and Metropolis acceptance is typically much higher than i.i.d. uniform spins.
+`cos(θ)` uniform in `[cos(theta_max), 1]`, i.e. `u'` is **uniform on the spherical cap** of
+half-angle `theta_max` about `u`. For moderate `theta_max`, moves stay close to the current
+direction and Metropolis acceptance is typically much higher than i.i.d. uniform spins; at
+`theta_max = π` the cap is the whole sphere and the proposal reduces (in distribution) to
+`_rand_unit_spin`.
+
+`theta_max` must lie in `[0, π]`; the callers gate it (`JPhiSpinMC` / `Simple.SCEMC`
+constructors). Beyond `π` the cap formula would silently *shrink* the proposal again,
+since only `cos(theta_max)` enters.
+
+The proposal is symmetric — `u'` is uniform on `cap(u, theta_max)` and `u ∈ cap(u',
+theta_max)` exactly when `u' ∈ cap(u, theta_max)`, with the same density — so the plain
+Metropolis acceptance `min(1, exp(-ΔE/T))` still satisfies detailed balance.
+
+Drawing `θ` uniformly instead (the pre-2026-08 behavior) puts a `1/sin θ` density on the
+sphere, so `theta_max = π` was *not* the uniform-sphere proposal: it kept a finite density
+of near-zero and near-antipodal moves (`P(|θ| < ε) = ε/π`), and acceptance therefore never
+collapsed at low temperature even at the widest setting.
 """
 @inline function _propose_spin_geodesic(
     rng,
@@ -193,8 +209,16 @@ current direction and Metropolis acceptance is typically much higher than i.i.d.
     tx *= invn
     ty *= invn
     tz *= invn
-    θ = theta_max * (2.0 * rand(rng) - 1.0)
-    c = cos(θ)
-    s = sin(θ)
+    # cos θ ~ U(cos theta_max, 1) is what makes u' uniform on the cap. Both the
+    # versine `1 - cos theta_max = 2 sin²(theta_max/2)` and `sin θ = sqrt(d (2 - d))`
+    # with `d = 1 - cos θ` are written in cancellation-free form: the naive
+    # `1 - cos(x)` and `sqrt(1 - c²)` lose most of their significant digits as
+    # `theta_max → 0`, which is exactly the small-step regime this proposal is for.
+    # `θ ≥ 0` (s ≥ 0) costs no coverage: `t` is isotropic in the tangent plane, so
+    # `-t` is drawn just as often and the two halves of the cap are reached equally.
+    sh = sin(0.5 * theta_max)
+    d = rand(rng) * (2.0 * sh * sh)
+    c = 1.0 - d
+    s = sqrt(d * (2.0 - d))
     return c * ux + s * tx, c * uy + s * ty, c * uz + s * tz
 end
